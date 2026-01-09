@@ -47,7 +47,7 @@ class ConversationResponse(BaseModel):
     title: str = Field(..., description="Auto-generated conversation title")
     provider: str = Field(..., description="LLM provider used")
     model_name: str = Field(..., description="Model name used")
-    messages: list[Message] = Field(..., description="Full conversation history")
+    message_count: int = Field(..., description="Number of messages in conversation")
     total_tokens_used: int = Field(..., description="Total tokens used across all messages")
     total_context_size: int = Field(..., description="Maximum context window for the model")
     remaining_context_size: int = Field(..., description="Remaining tokens available")
@@ -65,14 +65,7 @@ class ConversationResponse(BaseModel):
                 "title": "Understanding Quantum Computing",
                 "provider": "openai",
                 "model_name": "gpt-4o-mini",
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": "Explain quantum computing",
-                        "timestamp": "2024-01-06T12:00:00Z",
-                        "tokens_used": 10
-                    }
-                ],
+                "message_count": 1,
                 "total_tokens_used": 150,
                 "total_context_size": 128000,
                 "remaining_context_size": 127850,
@@ -157,7 +150,6 @@ class SendMessageResponse(BaseModel):
                     "title": "Understanding Quantum Computing",
                     "provider": "openai",
                     "model_name": "gpt-4o-mini",
-                    "messages": [],
                     "total_tokens_used": 195,
                     "created_at": "2024-01-06T12:00:00Z",
                     "updated_at": "2024-01-06T12:05:00Z"

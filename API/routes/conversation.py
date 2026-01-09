@@ -29,7 +29,7 @@ router = APIRouter(prefix="/conversations", tags=["conversations"])
 
 # Database indexes to create:
 # db.conversations.create_index([("user_id", 1), ("updated_at", -1)])
-# db.conversations.create_index([("user_id", 1), ("_id", 1)])
+# db.messages.create_index([("conversation_id", 1), ("sequence_number", 1)])
 
 
 @router.post(
@@ -74,43 +74,46 @@ async def create_conversation(
         if len(conversation.first_message) > 60:
             title = title[:57] + "..."
     
-    # Initial message (no tokens yet - no AI response)
-    now = datetime.utcnow()
-    first_message = {
-        "role": "user",
-        "content": conversation.first_message,
-        "timestamp": now,
-        "tokens_used": 0
-    }
-    
     # Calculate initial context metrics
     context_metrics = calculate_context_metrics(0, conversation.model_name)
     
-    # Create conversation document
+    # Create conversation document WITHOUT messages array
+    now = datetime.utcnow()
     conversation_doc = {
         "user_id": ObjectId(user_id),
         "title": title,
         "provider": conversation.provider.value,
         "model_name": conversation.model_name,
-        "messages": [first_message],
+        "message_count": 1,
         "total_tokens_used": 0,
         **context_metrics,
         "created_at": now,
         "updated_at": now
     }
     
-    # Insert into database
+    # Insert conversation into database
     result = await db.conversations.insert_one(conversation_doc)
-    conversation_doc["_id"] = result.inserted_id
+    conversation_id = result.inserted_id
     
-    # Convert to response model
+    # Insert first message into messages collection
+    first_message_doc = {
+        "conversation_id": conversation_id,
+        "user_id": ObjectId(user_id),
+        "role": "user",
+        "content": conversation.first_message,
+        "timestamp": now,
+        "tokens_used": 0,
+        "sequence_number": 0
+    }
+    await db.messages.insert_one(first_message_doc)
+    
     return ConversationResponse(
-        id=str(conversation_doc["_id"]),
+        id=str(conversation_id),
         user_id=str(conversation_doc["user_id"]),
         title=conversation_doc["title"],
         provider=conversation_doc["provider"],
         model_name=conversation_doc["model_name"],
-        messages=[Message(**first_message)],
+        message_count=conversation_doc["message_count"],
         total_tokens_used=conversation_doc["total_tokens_used"],
         total_context_size=conversation_doc["total_context_size"],
         remaining_context_size=conversation_doc["remaining_context_size"],
@@ -159,7 +162,7 @@ async def list_conversations(
             title=conv["title"],
             provider=conv["provider"],
             model_name=conv["model_name"],
-            message_count=len(conv.get("messages", [])),
+            message_count=conv.get("message_count", 0),
             total_tokens_used=conv.get("total_tokens_used", 0),
             total_context_size=conv.get("total_context_size", 0),
             remaining_context_size=conv.get("remaining_context_size", 0),
@@ -210,16 +213,13 @@ async def get_conversation(
             detail="Conversation not found"
         )
     
-    # Convert messages to Message models
-    messages = [Message(**msg) for msg in conversation.get("messages", [])]
-    
     return ConversationResponse(
         id=str(conversation["_id"]),
         user_id=str(conversation["user_id"]),
         title=conversation["title"],
         provider=conversation["provider"],
         model_name=conversation["model_name"],
-        messages=messages,
+        message_count=conversation.get("message_count", 0),
         total_tokens_used=conversation.get("total_tokens_used", 0),
         total_context_size=conversation.get("total_context_size", 0),
         remaining_context_size=conversation.get("remaining_context_size", 0),
@@ -277,83 +277,87 @@ async def send_message(
             detail="You don't have permission to access this conversation"
         )
     
-    # Create user message (tokens will be counted by API)
-    now = datetime.utcnow()
-    user_message = {
+    # Get current message count to determine sequence numbers
+    current_message_count = conversation.get("message_count", 0)
+    user_sequence = current_message_count
+    ai_sequence = current_message_count + 1
+    
+    # Fetch all existing messages for context limiting
+    messages_cursor = db.messages.find(
+        {"conversation_id": ObjectId(conversation_id)}
+    ).sort("sequence_number", 1)
+    existing_messages = await messages_cursor.to_list(length=None)
+    
+    # Convert to format for token calculation
+    messages_for_token_calc = [
+        {"role": msg["role"], "content": msg["content"]}
+        for msg in existing_messages
+    ]
+    
+    # Add the new user message for token calculation
+    messages_for_token_calc.append({
         "role": "user",
-        "content": request.content,
-        "timestamp": now,
-        "tokens_used": 0  # Will be updated with actual API tokens
-    }
-    
-    # Add user message to conversation temporarily
-    await db.conversations.update_one(
-        {"_id": ObjectId(conversation_id)},
-        {"$push": {"messages": user_message}}
-    )
-    
-    # Get updated conversation with new user message
-    conversation = await db.conversations.find_one({"_id": ObjectId(conversation_id)})
-    messages = conversation.get("messages", [])
+        "content": request.content
+    })
     
     # Apply token-based context limiting
-    # Get messages within token limit for sending to LLM
     messages_for_llm = get_messages_within_token_limit(
-        messages,
+        messages_for_token_calc,
         request.context_limit_tokens,
         conversation["model_name"]
     )
     
-    # Convert to format expected by chat_with_model
-    messages_for_api = [
-        {"role": msg["role"], "content": msg["content"]}
-        for msg in messages_for_llm
-    ]
-    
     # Get AI response with actual token usage
+    now = datetime.utcnow()
     try:
         ai_response_content, input_tokens, output_tokens = await chat_with_model(
             user_id=user_id,
             provider=Provider(conversation["provider"]),
-            messages=messages_for_api,
+            messages=messages_for_llm,
             db=db,
             model_name=conversation["model_name"]
         )
     except Exception as e:
-        # Rollback: remove the user message if AI call fails
-        await db.conversations.update_one(
-            {"_id": ObjectId(conversation_id)},
-            {"$pop": {"messages": 1}}
-        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to get AI response: {str(e)}"
         )
     
-    # Update user message with actual input tokens
-    await db.conversations.update_one(
-        {"_id": ObjectId(conversation_id), "messages.timestamp": now},
-        {"$set": {"messages.$.tokens_used": input_tokens}}
-    )
+    # Insert user message into messages collection
+    user_message_doc = {
+        "conversation_id": ObjectId(conversation_id),
+        "user_id": ObjectId(user_id),
+        "role": "user",
+        "content": request.content,
+        "timestamp": now,
+        "tokens_used": input_tokens,
+        "sequence_number": user_sequence
+    }
+    await db.messages.insert_one(user_message_doc)
     
-    # Create AI message with actual output tokens
-    ai_message = {
+    # Insert AI message into messages collection
+    ai_timestamp = datetime.utcnow()
+    ai_message_doc = {
+        "conversation_id": ObjectId(conversation_id),
+        "user_id": ObjectId(user_id),
         "role": "assistant",
         "content": ai_response_content,
-        "timestamp": datetime.utcnow(),
-        "tokens_used": output_tokens
+        "timestamp": ai_timestamp,
+        "tokens_used": output_tokens,
+        "sequence_number": ai_sequence
     }
+    await db.messages.insert_one(ai_message_doc)
     
     # Calculate new total and context metrics
     new_total_tokens = conversation["total_tokens_used"] + input_tokens + output_tokens
     context_metrics = calculate_context_metrics(new_total_tokens, conversation["model_name"])
     
-    # Add AI message and update conversation with context metrics
+    # Update conversation: increment message_count by 2, update tokens, timestamps
     await db.conversations.update_one(
         {"_id": ObjectId(conversation_id)},
         {
-            "$push": {"messages": ai_message},
             "$set": {
+                "message_count": current_message_count + 2,
                 "total_tokens_used": new_total_tokens,
                 **context_metrics,
                 "updated_at": datetime.utcnow()
@@ -364,16 +368,13 @@ async def send_message(
     # Get final updated conversation
     updated_conversation = await db.conversations.find_one({"_id": ObjectId(conversation_id)})
     
-    # Convert to response models
-    messages = [Message(**msg) for msg in updated_conversation.get("messages", [])]
-    
     conversation_response = ConversationResponse(
         id=str(updated_conversation["_id"]),
         user_id=str(updated_conversation["user_id"]),
         title=updated_conversation["title"],
         provider=updated_conversation["provider"],
         model_name=updated_conversation["model_name"],
-        messages=messages,
+        message_count=updated_conversation.get("message_count", 0),
         total_tokens_used=updated_conversation.get("total_tokens_used", 0),
         total_context_size=updated_conversation.get("total_context_size", 0),
         remaining_context_size=updated_conversation.get("remaining_context_size", 0),
@@ -383,8 +384,16 @@ async def send_message(
         updated_at=updated_conversation["updated_at"]
     )
     
+    # Create AI message response model
+    ai_message = Message(
+        role=ai_message_doc["role"],
+        content=ai_message_doc["content"],
+        timestamp=ai_message_doc["timestamp"],
+        tokens_used=ai_message_doc["tokens_used"]
+    )
+    
     return SendMessageResponse(
-        message=Message(**ai_message),
+        message=ai_message,
         conversation=conversation_response
     )
 
@@ -434,6 +443,9 @@ async def delete_conversation(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Conversation not found"
             )
+    
+    # Cascade delete: Delete all messages for this conversation
+    await db.messages.delete_many({"conversation_id": ObjectId(conversation_id)})
     
     # Delete the conversation
     await db.conversations.delete_one({"_id": ObjectId(conversation_id)})

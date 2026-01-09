@@ -53,6 +53,7 @@ Create a new conversation with the first message.
   "title": "Understanding Quantum Computing",
   "provider": "openai",
   "model_name": "gpt-4o-mini",
+  "message_count": 1,
   "messages": [
     {
       "role": "user",
@@ -158,6 +159,7 @@ Retrieve a specific conversation with full message history.
   "title": "Understanding Quantum Computing",
   "provider": "openai",
   "model_name": "gpt-4o-mini",
+  "message_count": 2,
   "messages": [
     {
       "role": "user",
@@ -397,8 +399,18 @@ Common errors:
 3. View history
    GET /conversations/{id}
    → See full message history
+   
+   Or use pagination:
+   GET /conversations/{id}/messages?skip=0&limit=50
+   → Get paginated messages
 
-4. Cleanup
+4. Manage messages (optional)
+   GET /conversations/{id}/messages - Paginated messages
+   PATCH /messages/{message_id} - Edit user messages
+   DELETE /messages/{message_id} - Delete messages
+   See [Messages API](messages.md) for details
+
+5. Cleanup
    DELETE /conversations/{id}
 ```
 

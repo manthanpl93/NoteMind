@@ -41,15 +41,12 @@ class TestConversationCreation:
         assert "title" in data
         assert data["title"] != first_message_content  # Should be LLM-generated
 
-        # Verify messages
-        messages = data["messages"]
-        assert len(messages) == 1
-        assert messages[0]["role"] == "user"
-        assert messages[0]["content"] == first_message_content
-        assert "timestamp" in messages[0]
-        # Initial message has 0 tokens - no API call made yet
-        assert messages[0]["tokens_used"] == 0
+        # Verify message_count
+        assert "message_count" in data
+        assert data["message_count"] == 1
         assert data["total_tokens_used"] == 0
+        
+        # Messages are now fetched via separate endpoint: GET /conversations/{id}/messages
 
         # Verify timestamps
         assert "created_at" in data
@@ -250,8 +247,9 @@ class TestConversationRetrieval:
         assert response.status_code == 200
         data = response.json()
         assert data["id"] == conversation_id
-        assert "messages" in data
-        assert len(data["messages"]) == 1
+        assert "message_count" in data
+        assert data["message_count"] == 1
+        # Messages are now fetched via separate endpoint: GET /conversations/{id}/messages
 
     async def test_get_conversation_not_found(self, authenticated_client: AsyncClient):
         """Verify 404 for non-existent conversation."""
@@ -324,9 +322,10 @@ class TestSendMessage:
 
         # Verify conversation updated
         conversation = data["conversation"]
-        assert len(conversation["messages"]) == 3  # user, assistant, user, assistant (wait, actually it's 2 originally + 1 user + 1 assistant = 4 total, but the first creation only has 1 message)
-        # Let me reconsider: first_message creates 1 message (user), then we send another message which adds 2 (user + assistant) = 3 total
+        assert "message_count" in conversation
+        assert conversation["message_count"] == 3  # 1 initial + 1 user + 1 assistant = 3 total
         assert conversation["total_tokens_used"] > 0
+        # Messages are now fetched via separate endpoint: GET /conversations/{id}/messages
 
     async def test_send_message_context_limit(
         self, authenticated_client: AsyncClient, test_db
@@ -500,15 +499,23 @@ class TestTokenTracking:
         )
         data = send_response.json()
         
+        # Verify conversation has token tracking
+        assert data["conversation"]["total_tokens_used"] > 0
+        
+        # Fetch messages from separate endpoint to verify token counts
+        messages_response = await authenticated_client.get(
+            f"/conversations/{conversation_id}/messages"
+        )
+        messages_data = messages_response.json()
+        messages = messages_data["messages"]
+        
         # Verify tokens are tracked from API response (not tiktoken estimates)
         # Both user and AI messages should have tokens > 0
-        messages = data["conversation"]["messages"]
         user_msg = messages[-2]  # Second to last
         ai_msg = messages[-1]  # Last
         
         assert user_msg["tokens_used"] > 0
         assert ai_msg["tokens_used"] > 0
-        assert data["conversation"]["total_tokens_used"] > 0
 
     async def test_total_tokens_accumulation(self, authenticated_client: AsyncClient):
         """Verify total_tokens_used accumulates correctly."""
@@ -717,8 +724,20 @@ class TestContextMetrics:
         )
         data = response.json()
 
+        # Verify conversation has correct token count
+        assert data["conversation"]["total_tokens_used"] > 0
+        
+        # Fetch messages from separate endpoint to verify token counts
+        messages_response = await authenticated_client.get(
+            f"/conversations/{conversation_id}/messages"
+        )
+        messages_data = messages_response.json()
+        messages = messages_data["messages"]
+        
+        # Should have at least 3 messages (initial user + new user + AI response)
+        assert len(messages) >= 3
+        
         # Verify both user and AI messages have token counts
-        messages = data["conversation"]["messages"]
         user_msg = messages[-2]  # Second to last is user message
         ai_msg = messages[-1]  # Last is AI message
 

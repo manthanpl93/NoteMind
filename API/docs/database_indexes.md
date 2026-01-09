@@ -33,32 +33,43 @@ db.conversations.find({ user_id: ObjectId("...") })
 
 ---
 
-#### 2. User ID + Conversation ID Index
+**Note:** Single document lookups by `_id` use MongoDB's default `_id` index (O(1) hash lookup), so a compound index on `{ user_id: 1, _id: 1 }` is not needed.
 
-**Purpose:** Quickly verify conversation ownership and retrieve specific conversations
+---
+
+## Messages Collection
+
+### Required Indexes
+
+#### 1. Conversation ID + Sequence Number Index
+
+**Purpose:** Efficiently retrieve and order messages for a conversation
 
 **Index:**
 ```javascript
-db.conversations.createIndex({ user_id: 1, _id: 1 })
+db.messages.createIndex({ conversation_id: 1, sequence_number: 1 })
 ```
 
 **Used By:**
-- `GET /conversations/{id}` - Get specific conversation
-- `POST /conversations/{id}/messages` - Send message to conversation
-- `DELETE /conversations/{id}` - Delete conversation
+- `GET /conversations/{id}/messages` - Get paginated messages
+- `GET /conversations/{id}` - Get conversation with all messages
+- `DELETE /conversations/{id}` - Cascade delete messages
 
 **Benefits:**
-- Fast verification of user ownership
-- Combines user_id and _id lookup in single index scan
-- Prevents users from accessing other users' conversations
+- Fast lookup of all messages for a conversation
+- Efficient ordering by sequence_number without sorting
+- Supports pagination with skip/limit
+- Enables cascade deletes efficiently
 
 **Query Pattern:**
 ```javascript
-db.conversations.findOne({
-  _id: ObjectId("..."),
-  user_id: ObjectId("...")
-})
+db.messages.find({ conversation_id: ObjectId("...") })
+  .sort({ sequence_number: 1 })
+  .skip(0)
+  .limit(50)
 ```
+
+**Note:** Security verification happens at the conversation level (checking `conversations.user_id`), so we don't need indexes on `messages.user_id`.
 
 ---
 
@@ -93,7 +104,9 @@ use notemind
 
 // Create conversation indexes
 db.conversations.createIndex({ user_id: 1, updated_at: -1 })
-db.conversations.createIndex({ user_id: 1, _id: 1 })
+
+// Create messages indexes
+db.messages.createIndex({ conversation_id: 1, sequence_number: 1 })
 
 // Verify indexes
 db.conversations.getIndexes()
@@ -114,9 +127,10 @@ async def create_indexes():
         ("updated_at", -1)
     ])
     
-    await db.conversations.create_index([
-        ("user_id", 1),
-        ("_id", 1)
+    # Create messages indexes
+    await db.messages.create_index([
+        ("conversation_id", 1),
+        ("sequence_number", 1)
     ])
     
     print("Indexes created successfully")
@@ -344,17 +358,22 @@ When backing up MongoDB:
 ## Summary
 
 **Required Indexes:**
-1. `{ user_id: 1, updated_at: -1 }` - List conversations
-2. `{ user_id: 1, _id: 1 }` - Get/update/delete conversation
+
+**Conversations:**
+1. `{ user_id: 1, updated_at: -1 }` - List conversations sorted by recent activity
+
+**Messages:**
+1. `{ conversation_id: 1, sequence_number: 1 }` - Fetch and order messages for conversations
 
 **Quick Setup:**
 ```javascript
 use notemind
 db.conversations.createIndex({ user_id: 1, updated_at: -1 })
-db.conversations.createIndex({ user_id: 1, _id: 1 })
-db.conversations.getIndexes()  // Verify
+db.messages.createIndex({ conversation_id: 1, sequence_number: 1 })
+db.conversations.getIndexes()  // Verify conversations
+db.messages.getIndexes()  // Verify messages
 ```
 
-These two indexes provide optimal performance for all conversation API operations.
+These indexes provide optimal performance for all conversation and message API operations.
 
 

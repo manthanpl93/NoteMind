@@ -64,14 +64,17 @@ class TestOpenAIIntegration:
             {"role": "user", "content": "Say 'Hello, World!' and nothing else."}
         ]
         
-        response = await chat_with_model(
+        response_content, input_tokens, output_tokens = await chat_with_model(
             sample_user_id, Provider.OPENAI, messages, mock_integration_db_openai
         )
         
-        assert response is not None
-        assert isinstance(response, str)
-        assert len(response) > 0
-        print(f"\nOpenAI response: {response}")
+        assert response_content is not None
+        assert isinstance(response_content, str)
+        assert len(response_content) > 0
+        assert input_tokens > 0
+        assert output_tokens > 0
+        print(f"\nOpenAI response: {response_content}")
+        print(f"Tokens - Input: {input_tokens}, Output: {output_tokens}")
     
     @pytest.mark.asyncio
     async def test_openai_chat_conversation(
@@ -88,16 +91,19 @@ class TestOpenAIIntegration:
             {"role": "user", "content": "What about 3+3?"},
         ]
         
-        response = await chat_with_model(
+        response_content, input_tokens, output_tokens = await chat_with_model(
             sample_user_id, Provider.OPENAI, messages, mock_integration_db_openai
         )
         
-        assert response is not None
-        assert isinstance(response, str)
-        assert len(response) > 0
+        assert response_content is not None
+        assert isinstance(response_content, str)
+        assert len(response_content) > 0
+        assert input_tokens > 0
+        assert output_tokens > 0
         # The response should be about 6 or addition
-        assert any(keyword in response.lower() for keyword in ["6", "six", "equals"])
-        print(f"\nOpenAI conversation response: {response}")
+        assert any(keyword in response_content.lower() for keyword in ["6", "six", "equals"])
+        print(f"\nOpenAI conversation response: {response_content}")
+        print(f"Tokens - Input: {input_tokens}, Output: {output_tokens}")
     
     @pytest.mark.asyncio
     async def test_openai_custom_model(
@@ -112,7 +118,7 @@ class TestOpenAIIntegration:
         ]
         
         # Use gpt-4o-mini which is typically faster and cheaper for testing
-        response = await chat_with_model(
+        response_content, input_tokens, output_tokens = await chat_with_model(
             sample_user_id,
             Provider.OPENAI,
             messages,
@@ -120,8 +126,11 @@ class TestOpenAIIntegration:
             model_name="gpt-4o-mini",
         )
         
-        assert response is not None
-        assert isinstance(response, str)
-        print(f"\nOpenAI custom model response: {response}")
+        assert response_content is not None
+        assert isinstance(response_content, str)
+        assert input_tokens > 0
+        assert output_tokens > 0
+        print(f"\nOpenAI custom model response: {response_content}")
+        print(f"Tokens - Input: {input_tokens}, Output: {output_tokens}")
 
 

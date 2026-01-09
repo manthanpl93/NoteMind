@@ -140,6 +140,7 @@ curl -X POST http://localhost:8000/conversations/{conversation_id}/messages \
 ## API Documentation
 
 - **[Conversation API](api/conversations.md)** - Managing AI conversations
+- **[Messages API](api/messages.md)** - Managing individual messages (pagination, edit, delete)
 - **[User API](api/users.md)** - User management and authentication
 - **[Error Handling](api/errors.md)** - Error codes and responses
 
@@ -203,20 +204,36 @@ User API keys are encrypted at rest using Fernet encryption.
   title: String,
   provider: String,
   model_name: String,
-  messages: [{
-    role: String,
-    content: String,
-    timestamp: ISODate,
-    tokens_used: Integer
-  }],
+  message_count: Integer,  // Denormalized count for performance
   total_tokens_used: Integer,
+  total_context_size: Integer,
+  remaining_context_size: Integer,
+  total_used_percentage: Float,
+  remaining_percentage: Float,
   created_at: ISODate,
   updated_at: ISODate
 }
 
 // Indexes
 db.conversations.createIndex({ user_id: 1, updated_at: -1 })
-db.conversations.createIndex({ user_id: 1, _id: 1 })
+```
+
+### Messages Collection
+
+```javascript
+{
+  _id: ObjectId,
+  conversation_id: ObjectId,  // Foreign key to conversations
+  user_id: ObjectId,  // Denormalized for security
+  role: String,  // "user", "assistant", or "system"
+  content: String,
+  timestamp: ISODate,
+  tokens_used: Integer,
+  sequence_number: Integer  // Order of message in conversation (0-indexed)
+}
+
+// Indexes
+db.messages.createIndex({ conversation_id: 1, sequence_number: 1 })
 ```
 
 ## Testing

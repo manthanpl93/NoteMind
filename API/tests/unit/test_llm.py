@@ -305,11 +305,13 @@ class TestChatWithModel:
             )
             mock_get_model.return_value = mock_model
             
-            result = await chat_with_model(
+            content, input_tokens, output_tokens = await chat_with_model(
                 sample_user_id, Provider.OPENAI, sample_simple_messages, mock_database
             )
             
-            assert result == expected_response
+            assert content == expected_response
+            assert isinstance(input_tokens, int)
+            assert isinstance(output_tokens, int)
             mock_get_model.assert_called_once_with(
                 sample_user_id, Provider.OPENAI, mock_database, None
             )
@@ -329,11 +331,13 @@ class TestChatWithModel:
             )
             mock_get_model.return_value = mock_model
             
-            result = await chat_with_model(
+            content, input_tokens, output_tokens = await chat_with_model(
                 sample_user_id, Provider.ANTHROPIC, sample_simple_messages, mock_database
             )
             
-            assert result == expected_response
+            assert content == expected_response
+            assert isinstance(input_tokens, int)
+            assert isinstance(output_tokens, int)
             mock_get_model.assert_called_once_with(
                 sample_user_id, Provider.ANTHROPIC, mock_database, None
             )
@@ -352,11 +356,13 @@ class TestChatWithModel:
             )
             mock_get_model.return_value = mock_model
             
-            result = await chat_with_model(
+            content, input_tokens, output_tokens = await chat_with_model(
                 sample_user_id, Provider.GOOGLE, sample_simple_messages, mock_database
             )
             
-            assert result == expected_response
+            assert content == expected_response
+            assert isinstance(input_tokens, int)
+            assert isinstance(output_tokens, int)
             mock_get_model.assert_called_once_with(
                 sample_user_id, Provider.GOOGLE, mock_database, None
             )
@@ -376,7 +382,7 @@ class TestChatWithModel:
             )
             mock_get_model.return_value = mock_model
             
-            result = await chat_with_model(
+            content, input_tokens, output_tokens = await chat_with_model(
                 sample_user_id,
                 Provider.OPENAI,
                 sample_simple_messages,
@@ -384,7 +390,9 @@ class TestChatWithModel:
                 model_name=custom_model,
             )
             
-            assert result == expected_response
+            assert content == expected_response
+            assert isinstance(input_tokens, int)
+            assert isinstance(output_tokens, int)
             mock_get_model.assert_called_once_with(
                 sample_user_id, Provider.OPENAI, mock_database, custom_model
             )
@@ -403,11 +411,13 @@ class TestChatWithModel:
             )
             mock_get_model.return_value = mock_model
             
-            result = await chat_with_model(
+            content, input_tokens, output_tokens = await chat_with_model(
                 sample_user_id, Provider.OPENAI, sample_messages, mock_database
             )
             
-            assert result == expected_response
+            assert content == expected_response
+            assert isinstance(input_tokens, int)
+            assert isinstance(output_tokens, int)
             
             # Verify ainvoke was called with converted messages
             mock_model.ainvoke.assert_called_once()
