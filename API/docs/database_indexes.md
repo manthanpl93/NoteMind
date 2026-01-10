@@ -2,33 +2,96 @@
 
 This document describes the required MongoDB indexes for optimal performance of the NoteMind API.
 
+## Folders Collection
+
+### Required Indexes
+
+#### 1. User ID + Name Index
+
+**Purpose:** Efficiently retrieve and sort folders for a user, enforce name uniqueness
+
+**Index:**
+```javascript
+db.folders.create_index([("user_id", 1), ("name", 1)])
+```
+
+**Used By:**
+- `GET /folders` - List folders sorted by creation date
+- `POST /folders` - Check for duplicate names
+- `PATCH /folders/{id}` - Check for duplicate names during update
+
+**Benefits:**
+- Fast lookup of all folders for a user
+- Efficient name uniqueness checking (case-insensitive via application logic)
+- Supports pagination with skip/limit
+- Enables compound queries for user-specific operations
+
+**Query Pattern:**
+```javascript
+// List user's folders
+db.folders.find({ user_id: ObjectId("...") })
+  .sort({ created_at: -1 })
+  .skip(0)
+  .limit(50)
+
+// Check name uniqueness
+db.folders.find({
+  user_id: ObjectId("..."),
+  name: { $regex: "^name$", $options: "i" }
+})
+```
+
+---
+
 ## Conversations Collection
 
 ### Required Indexes
 
-#### 1. User ID + Updated At Index
+#### 1. User ID + Folder ID + Updated At Index
 
-**Purpose:** Efficiently retrieve and sort conversations for a user by most recent activity
+**Purpose:** Efficiently retrieve and sort conversations for a user by folder and most recent activity
 
 **Index:**
 ```javascript
-db.conversations.createIndex({ user_id: 1, updated_at: -1 })
+db.conversations.createIndex({ user_id: 1, folder_id: 1, updated_at: -1 })
 ```
 
 **Used By:**
-- `GET /conversations` - List conversations sorted by updated_at descending
+- `GET /conversations` - List conversations with optional folder filtering
+- `GET /conversations?folder_id=null` - List conversations without folders
+- `GET /conversations?folder_id={id}` - List conversations in specific folder
 
 **Benefits:**
 - Fast lookup of all conversations for a user
+- Efficient filtering by folder (including null folder_id)
 - Efficient sorting by updated_at without scanning all documents
 - Supports pagination with skip/limit
+- Enables folder-based organization and queries
 
 **Query Pattern:**
 ```javascript
+// List all conversations for user
 db.conversations.find({ user_id: ObjectId("...") })
   .sort({ updated_at: -1 })
   .skip(0)
   .limit(50)
+
+// Filter by specific folder
+db.conversations.find({
+  user_id: ObjectId("..."),
+  folder_id: ObjectId("...")
+})
+  .sort({ updated_at: -1 })
+
+// Filter for conversations without folders
+db.conversations.find({
+  user_id: ObjectId("..."),
+  $or: [
+    { folder_id: { $exists: false } },
+    { folder_id: null }
+  ]
+})
+  .sort({ updated_at: -1 })
 ```
 
 ---
@@ -102,14 +165,19 @@ db.users.createIndex({ email: 1 }, { unique: true })
 // Connect to your database
 use notemind
 
+// Create folder indexes
+db.folders.createIndex({ user_id: 1, name: 1 })
+
 // Create conversation indexes
-db.conversations.createIndex({ user_id: 1, updated_at: -1 })
+db.conversations.createIndex({ user_id: 1, folder_id: 1, updated_at: -1 })
 
 // Create messages indexes
 db.messages.createIndex({ conversation_id: 1, sequence_number: 1 })
 
 // Verify indexes
+db.folders.getIndexes()
 db.conversations.getIndexes()
+db.messages.getIndexes()
 ```
 
 ### Using Python/Motor (Async)
@@ -120,19 +188,26 @@ from motor.motor_asyncio import AsyncIOMotorClient
 async def create_indexes():
     client = AsyncIOMotorClient("mongodb://localhost:27017")
     db = client["notemind"]
-    
+
+    # Create folder indexes
+    await db.folders.create_index([
+        ("user_id", 1),
+        ("name", 1)
+    ])
+
     # Create conversation indexes
     await db.conversations.create_index([
         ("user_id", 1),
+        ("folder_id", 1),
         ("updated_at", -1)
     ])
-    
+
     # Create messages indexes
     await db.messages.create_index([
         ("conversation_id", 1),
         ("sequence_number", 1)
     ])
-    
+
     print("Indexes created successfully")
 ```
 
@@ -145,17 +220,25 @@ Add to your FastAPI application startup:
 async def create_database_indexes(db):
     """Create required database indexes."""
     try:
+        # Folder indexes
+        await db.folders.create_index([
+            ("user_id", 1),
+            ("name", 1)
+        ])
+
         # Conversation indexes
         await db.conversations.create_index([
             ("user_id", 1),
+            ("folder_id", 1),
             ("updated_at", -1)
         ])
-        
-        await db.conversations.create_index([
-            ("user_id", 1),
-            ("_id", 1)
+
+        # Messages indexes
+        await db.messages.create_index([
+            ("conversation_id", 1),
+            ("sequence_number", 1)
         ])
-        
+
         print("Database indexes created")
     except Exception as e:
         print(f"Error creating indexes: {e}")
@@ -359,8 +442,11 @@ When backing up MongoDB:
 
 **Required Indexes:**
 
+**Folders:**
+1. `{ user_id: 1, name: 1 }` - List folders and enforce name uniqueness per user
+
 **Conversations:**
-1. `{ user_id: 1, updated_at: -1 }` - List conversations sorted by recent activity
+1. `{ user_id: 1, folder_id: 1, updated_at: -1 }` - List conversations with folder filtering and sorting
 
 **Messages:**
 1. `{ conversation_id: 1, sequence_number: 1 }` - Fetch and order messages for conversations
@@ -368,10 +454,19 @@ When backing up MongoDB:
 **Quick Setup:**
 ```javascript
 use notemind
-db.conversations.createIndex({ user_id: 1, updated_at: -1 })
+// Create folder indexes
+db.folders.createIndex({ user_id: 1, name: 1 })
+
+// Create conversation indexes
+db.conversations.createIndex({ user_id: 1, folder_id: 1, updated_at: -1 })
+
+// Create messages indexes
 db.messages.createIndex({ conversation_id: 1, sequence_number: 1 })
-db.conversations.getIndexes()  // Verify conversations
-db.messages.getIndexes()  // Verify messages
+
+// Verify all indexes
+db.folders.getIndexes()
+db.conversations.getIndexes()
+db.messages.getIndexes()
 ```
 
 These indexes provide optimal performance for all conversation and message API operations.

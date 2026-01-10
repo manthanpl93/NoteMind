@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from database import connect_to_mongo, close_mongo_connection
 from routes.user import router as user_router
 from routes.conversation import router as conversation_router
+from routes.folder import router as folder_router
 from routes.message import conversation_message_router, message_router
 from routes.model import router as model_router
 
@@ -38,6 +39,7 @@ app.add_middleware(
 
 # Include routers
 app.include_router(user_router)
+app.include_router(folder_router)
 app.include_router(conversation_router)
 app.include_router(conversation_message_router)
 app.include_router(message_router)

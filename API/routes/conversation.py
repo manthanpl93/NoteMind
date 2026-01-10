@@ -26,12 +26,33 @@ from utils.llm import (
 )
 from utils.model_config import get_model_context_limit, get_model_info
 from utils.conversation_deps import verify_conversation_ownership
+from routes.folder import validate_folder_access_by_id
+from typing import Optional, Tuple
+
+
+async def validate_conversation_folder_access(
+    conversation: ConversationCreate,
+    current_user: dict = Depends(get_current_user),
+    db: Any = Depends(get_database)
+) -> Tuple[ConversationCreate, Optional[ObjectId]]:
+    """
+    FastAPI dependency that validates ConversationCreate and folder access.
+
+    Returns:
+        Tuple of (conversation, folder_id) where folder_id is ObjectId if valid, None if not provided
+    """
+    folder_id = None
+    if conversation.folder_id:
+        # Use the same validation logic as verify_folder_ownership
+        folder_id = await validate_folder_access_by_id(conversation.folder_id, current_user, db)
+
+    return conversation, folder_id
 
 router = APIRouter(prefix="/conversations", tags=["conversations"])
 
 
 # Database indexes to create:
-# db.conversations.create_index([("user_id", 1), ("updated_at", -1)])
+# db.conversations.create_index([("user_id", 1), ("folder_id", 1), ("updated_at", -1)])
 # db.messages.create_index([("conversation_id", 1), ("sequence_number", 1)])
 
 
@@ -45,22 +66,26 @@ router = APIRouter(prefix="/conversations", tags=["conversations"])
                 "Token usage is tracked for the initial message."
 )
 async def create_conversation(
-    conversation: ConversationCreate,
+    validated_data: Tuple[ConversationCreate, Optional[ObjectId]] = Depends(validate_conversation_folder_access),
     current_user: dict = Depends(get_current_user),
     db: Any = Depends(get_database)
 ):
     """
     Create a new conversation with an AI model.
-    
+
     - **provider**: Must be one of: openai, anthropic, google
     - **model_name**: Model identifier for the provider (e.g., gpt-4o-mini)
     - **first_message**: The initial message that starts the conversation
-    
+    - **folder_id**: Optional ID of folder to place conversation in
+
     The API will automatically:
     - Generate a meaningful title using GPT (max 60 characters)
     - Track token usage for the message
     - Initialize the conversation in the database
+    - Validate folder ownership if folder_id provided
     """
+    # Unpack validated data from dependency
+    conversation, folder_id = validated_data
     user_id = current_user["user_id"]
     
     # Generate title using LLM
@@ -93,6 +118,10 @@ async def create_conversation(
         "created_at": now,
         "updated_at": now
     }
+
+    # Add folder_id if provided
+    if folder_id:
+        conversation_doc["folder_id"] = folder_id
     
     # Insert conversation into database
     result = await db.conversations.insert_one(conversation_doc)
@@ -122,6 +151,7 @@ async def create_conversation(
         remaining_context_size=conversation_doc["remaining_context_size"],
         total_used_percentage=conversation_doc["total_used_percentage"],
         remaining_percentage=conversation_doc["remaining_percentage"],
+        folder_id=str(folder_id) if folder_id else None,
         created_at=conversation_doc["created_at"],
         updated_at=conversation_doc["updated_at"]
     )
@@ -132,28 +162,54 @@ async def create_conversation(
     response_model=list[ConversationListItem],
     summary="List user's conversations",
     description="Returns a list of the user's conversations sorted by most recent activity. "
-                "Supports pagination with skip and limit parameters."
+                "Supports pagination with skip and limit parameters. "
+                "Can filter by folder_id or list conversations without folders."
 )
 async def list_conversations(
     skip: int = Query(default=0, ge=0, description="Number of conversations to skip"),
     limit: int = Query(default=50, ge=1, le=100, description="Maximum number of conversations to return"),
+    folder_id: str = Query(default=None, description="Filter by folder ID. Use 'null' to list conversations without folders"),
     current_user: dict = Depends(get_current_user),
     db: Any = Depends(get_database)
 ):
     """
     List all conversations for the authenticated user.
-    
+
     Returns conversations sorted by updated_at (most recent first).
-    
+
     - **skip**: Number of conversations to skip (for pagination)
     - **limit**: Maximum number of conversations to return (default 50, max 100)
+    - **folder_id**: Optional filter by folder ID. Use 'null' to list conversations without folders
     """
     user_id = current_user["user_id"]
-    
+
+    # Build query with optional folder filtering
+    query = {"user_id": ObjectId(user_id)}
+
+    if folder_id == "null":
+        # Filter for conversations without folders
+        query["$or"] = [
+            {"folder_id": {"$exists": False}},
+            {"folder_id": None}
+        ]
+    elif folder_id:
+        # Validate folder_id format
+        if not ObjectId.is_valid(folder_id):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid folder_id format"
+            )
+        # Filter for specific folder and verify ownership
+        folder = await db.folders.find_one({"_id": ObjectId(folder_id)})
+        if folder and folder["user_id"] != ObjectId(user_id):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You don't have permission to access this folder"
+            )
+        query["folder_id"] = ObjectId(folder_id)
+
     # Query conversations for this user, sorted by updated_at descending
-    cursor = db.conversations.find(
-        {"user_id": ObjectId(user_id)}
-    ).sort("updated_at", -1).skip(skip).limit(limit)
+    cursor = db.conversations.find(query).sort("updated_at", -1).skip(skip).limit(limit)
     
     conversations = await cursor.to_list(length=limit)
     
@@ -171,6 +227,7 @@ async def list_conversations(
             remaining_context_size=conv.get("remaining_context_size", 0),
             total_used_percentage=conv.get("total_used_percentage", 0.0),
             remaining_percentage=conv.get("remaining_percentage", 100.0),
+            folder_id=str(conv["folder_id"]) if conv.get("folder_id") else None,
             created_at=conv["created_at"],
             updated_at=conv["updated_at"]
         ))
@@ -206,6 +263,7 @@ async def get_conversation(
         remaining_context_size=conversation.get("remaining_context_size", 0),
         total_used_percentage=conversation.get("total_used_percentage", 0.0),
         remaining_percentage=conversation.get("remaining_percentage", 100.0),
+        folder_id=str(conversation["folder_id"]) if conversation.get("folder_id") else None,
         created_at=conversation["created_at"],
         updated_at=conversation["updated_at"]
     )
@@ -343,6 +401,7 @@ async def send_message(
         remaining_context_size=updated_conversation.get("remaining_context_size", 0),
         total_used_percentage=updated_conversation.get("total_used_percentage", 0.0),
         remaining_percentage=updated_conversation.get("remaining_percentage", 100.0),
+        folder_id=str(updated_conversation["folder_id"]) if updated_conversation.get("folder_id") else None,
         created_at=updated_conversation["created_at"],
         updated_at=updated_conversation["updated_at"]
     )
@@ -435,6 +494,7 @@ async def switch_conversation_model(
         remaining_context_size=updated_conversation.get("remaining_context_size", 0),
         total_used_percentage=updated_conversation.get("total_used_percentage", 0.0),
         remaining_percentage=updated_conversation.get("remaining_percentage", 100.0),
+        folder_id=str(updated_conversation["folder_id"]) if updated_conversation.get("folder_id") else None,
         created_at=updated_conversation["created_at"],
         updated_at=updated_conversation["updated_at"]
     )

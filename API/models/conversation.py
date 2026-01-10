@@ -29,13 +29,15 @@ class ConversationCreate(BaseModel):
     provider: Provider = Field(..., description="LLM provider (openai, anthropic, google)")
     model_name: str = Field(..., description="Specific model name to use")
     first_message: str = Field(..., min_length=1, description="The initial message to start the conversation")
-    
+    folder_id: Optional[str] = Field(None, description="ID of the folder to place conversation in (optional)")
+
     class Config:
         json_schema_extra = {
             "example": {
                 "provider": "openai",
                 "model_name": "gpt-4o-mini",
-                "first_message": "Explain quantum computing in simple terms"
+                "first_message": "Explain quantum computing in simple terms",
+                "folder_id": "507f1f77bcf86cd799439011"
             }
         }
 
@@ -53,9 +55,10 @@ class ConversationResponse(BaseModel):
     remaining_context_size: int = Field(..., description="Remaining tokens available")
     total_used_percentage: float = Field(..., description="Percentage of context used (0-100)")
     remaining_percentage: float = Field(..., description="Percentage of context remaining (0-100)")
+    folder_id: Optional[str] = Field(None, description="ID of the folder containing this conversation")
     created_at: datetime = Field(..., description="When the conversation was created")
     updated_at: datetime = Field(..., description="When the conversation was last updated")
-    
+
     class Config:
         from_attributes = True
         json_schema_extra = {
@@ -71,6 +74,7 @@ class ConversationResponse(BaseModel):
                 "remaining_context_size": 127850,
                 "total_used_percentage": 0.12,
                 "remaining_percentage": 99.88,
+                "folder_id": "507f1f77bcf86cd799439013",
                 "created_at": "2024-01-06T12:00:00Z",
                 "updated_at": "2024-01-06T12:05:00Z"
             }
@@ -89,9 +93,10 @@ class ConversationListItem(BaseModel):
     remaining_context_size: int = Field(..., description="Remaining tokens available")
     total_used_percentage: float = Field(..., description="Percentage of context used")
     remaining_percentage: float = Field(..., description="Percentage of context remaining")
+    folder_id: Optional[str] = Field(None, description="ID of the folder containing this conversation")
     created_at: datetime = Field(..., description="Creation timestamp")
     updated_at: datetime = Field(..., description="Last update timestamp")
-    
+
     class Config:
         from_attributes = True
         json_schema_extra = {
@@ -106,6 +111,7 @@ class ConversationListItem(BaseModel):
                 "remaining_context_size": 126457,
                 "total_used_percentage": 1.21,
                 "remaining_percentage": 98.79,
+                "folder_id": "507f1f77bcf86cd799439013",
                 "created_at": "2024-01-06T12:00:00Z",
                 "updated_at": "2024-01-06T12:30:00Z"
             }
