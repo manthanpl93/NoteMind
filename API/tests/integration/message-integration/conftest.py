@@ -22,8 +22,11 @@ load_dotenv()
 async def test_db():
     """Create a test database connection."""
     mongodb_uri = os.getenv("mongodb_uri", "mongodb://localhost:27017")
+    test_db_name = os.getenv("test_database_name")
+    if not test_db_name:
+        pytest.skip("test_database_name environment variable not set")
     client = AsyncIOMotorClient(mongodb_uri)
-    db = client["test_notemind_messages"]
+    db = client[test_db_name]
     
     yield db
     
