@@ -1,24 +1,6 @@
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+import { getSession } from 'next-auth/react';
 
-// Token storage utilities
-export const tokenStorage = {
-  getToken: (): string | null => {
-    if (typeof window !== 'undefined') {
-      return localStorage.getItem('access_token');
-    }
-    return null;
-  },
-  setToken: (token: string): void => {
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('access_token', token);
-    }
-  },
-  removeToken: (): void => {
-    if (typeof window !== 'undefined') {
-      localStorage.removeItem('access_token');
-    }
-  },
-};
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
 
 interface ApiError {
   message: string;
@@ -44,11 +26,11 @@ class ApiClient {
       ...options.headers,
     };
 
-    // Add JWT token to request if available and auth is required
+    // Get JWT token from NextAuth session
     if (includeAuth) {
-      const token = tokenStorage.getToken();
-      if (token) {
-        (headers as Record<string, string>)['Authorization'] = `Bearer ${token}`;
+      const session = await getSession();
+      if (session?.accessToken) {
+        (headers as Record<string, string>)['Authorization'] = `Bearer ${session.accessToken}`;
       }
     }
 
@@ -60,11 +42,6 @@ class ApiClient {
     const response = await fetch(url, config);
 
     if (!response.ok) {
-      // Handle 401 - token expired or invalid
-      if (response.status === 401) {
-        tokenStorage.removeToken();
-      }
-      
       const error = await response.json().catch(() => ({}));
       const apiError: ApiError = {
         message: error.detail || 'An error occurred',
@@ -118,11 +95,6 @@ export interface SignupData {
   last_name: string;
 }
 
-export interface LoginData {
-  email: string;
-  password: string;
-}
-
 export interface UserResponse {
   id: string;
   email: string;
@@ -136,33 +108,14 @@ export interface AuthResponse {
   user: UserResponse;
 }
 
-// User API methods
+// User API methods (signup only - login handled by NextAuth)
 export const userApi = {
   /**
-   * Create a new user account and get JWT token
+   * Create a new user account
+   * After signup, user should login through NextAuth
    */
   signup: async (data: SignupData): Promise<AuthResponse> => {
-    const response = await api.post<AuthResponse>('/users', data, false);
-    // Store the token
-    tokenStorage.setToken(response.access_token);
-    return response;
-  },
-
-  /**
-   * Login and get JWT token
-   */
-  login: async (data: LoginData): Promise<AuthResponse> => {
-    const response = await api.post<AuthResponse>('/users/login', data, false);
-    // Store the token
-    tokenStorage.setToken(response.access_token);
-    return response;
-  },
-
-  /**
-   * Logout - clear stored token
-   */
-  logout: (): void => {
-    tokenStorage.removeToken();
+    return api.post<AuthResponse>('/users/', data, false);
   },
 
   /**
@@ -170,12 +123,5 @@ export const userApi = {
    */
   getProfile: (): Promise<UserResponse> => {
     return api.get<UserResponse>('/users/me');
-  },
-
-  /**
-   * Check if user has a stored token
-   */
-  isAuthenticated: (): boolean => {
-    return tokenStorage.getToken() !== null;
   },
 };

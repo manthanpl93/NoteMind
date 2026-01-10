@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { useSession } from 'next-auth/react'
 import { 
   Brain, 
   Plus, 
@@ -30,6 +31,7 @@ import {
 } from 'lucide-react'
 import { Dialog } from '../components/Dialog'
 import { ChatComponent } from '../components/Chat'
+import { UserSection } from '../../components/UserSection'
 
 interface TOCItem {
   id: string
@@ -102,6 +104,9 @@ const availableIcons = [
 ]
 
 export default function DashboardPage() {
+  const { data: session, status } = useSession()
+
+  // All hooks must be called before any conditional returns
   const [spaces, setSpaces] = useState<Space[]>([
     { 
       id: '1', 
@@ -828,6 +833,13 @@ export async function generateMetadata({ params }) {
     }
   }, [])
 
+  // Redirect to login if not authenticated
+  useEffect(() => {
+    if (status === 'unauthenticated') {
+      window.location.href = '/login'
+    }
+  }, [status])
+
   // Keyboard shortcuts for tab management
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -864,6 +876,19 @@ export async function generateMetadata({ params }) {
     return () => window.removeEventListener('keydown', handleKeyDown)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentView, activeChatTabId, openChatTabs])
+
+  // Show loading while checking authentication
+  if (status === 'loading') {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="text-center">
+          <Brain className="h-16 w-16 text-purple-600 mx-auto mb-4 animate-pulse" />
+          <h2 className="text-xl font-semibold text-gray-900 mb-2">Loading...</h2>
+          <p className="text-gray-600">Checking authentication</p>
+        </div>
+      </div>
+    )
+  }
 
   const getIconComponent = (iconName: string) => {
     const icon = availableIcons.find(i => i.name === iconName)
@@ -1250,13 +1275,7 @@ export async function generateMetadata({ params }) {
           </div>
           
           {/* User Section */}
-          <button className="w-full flex items-center gap-2 p-2 hover:bg-gray-100 rounded-lg transition-colors">
-            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-purple-500 to-blue-500 flex items-center justify-center text-white font-semibold text-sm">
-              U
-            </div>
-            <span className="flex-1 text-left text-sm font-medium text-gray-700">User Account</span>
-            <ChevronDown className="h-4 w-4 text-gray-500" />
-          </button>
+          <UserSection user={session?.user} />
         </div>
 
         {/* Navigation */}

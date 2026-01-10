@@ -3,7 +3,7 @@ import CredentialsProvider from 'next-auth/providers/credentials';
 import GoogleProvider from 'next-auth/providers/google';
 import GitHubProvider from 'next-auth/providers/github';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
 
 export const authOptions: NextAuthOptions = {
   providers: [
@@ -15,11 +15,16 @@ export const authOptions: NextAuthOptions = {
         password: { label: 'Password', type: 'password' },
       },
       async authorize(credentials) {
+        console.log('🔍 Authorize called with:', { email: credentials?.email });
+
         if (!credentials?.email || !credentials?.password) {
-          throw new Error('Email and password are required');
+          console.error('❌ Missing credentials');
+          return null;
         }
 
         try {
+          console.log('📡 Calling API:', `${API_URL}/users/login`);
+          
           const response = await fetch(`${API_URL}/users/login`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -29,16 +34,20 @@ export const authOptions: NextAuthOptions = {
             }),
           });
 
+          console.log('📊 API Response status:', response.status);
+
           if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.detail || 'Invalid credentials');
+            const errorText = await response.text();
+            console.error('❌ API returned error:', response.status, errorText);
+            return null;
           }
 
           const data = await response.json();
-          
+          console.log('✅ Login successful for user:', data.user.email);
+
           // Return user with access token
           return {
-            id: data.user.id,
+            id: data.user.id.toString(),
             email: data.user.email,
             name: `${data.user.first_name} ${data.user.last_name}`,
             firstName: data.user.first_name,
@@ -46,10 +55,8 @@ export const authOptions: NextAuthOptions = {
             accessToken: data.access_token,
           };
         } catch (error) {
-          if (error instanceof Error) {
-            throw new Error(error.message);
-          }
-          throw new Error('Authentication failed');
+          console.error('❌ Authentication error:', error);
+          return null;
         }
       },
     }),
