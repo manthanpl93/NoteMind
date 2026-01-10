@@ -131,11 +131,23 @@ class SendMessageRequest(BaseModel):
         }
 
 
+class ModelSwitchRequest(BaseModel):
+    """Request model for switching the model in a conversation."""
+    model: str = Field(..., description="New model name to switch to")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "model": "gpt-4-turbo"
+            }
+        }
+
+
 class SendMessageResponse(BaseModel):
     """Response model for sending a message."""
     message: Message = Field(..., description="The AI's response message")
     conversation: ConversationResponse = Field(..., description="Updated conversation")
-    
+
     class Config:
         json_schema_extra = {
             "example": {

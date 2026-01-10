@@ -277,11 +277,11 @@ class TestConversationRetrieval:
         )
         conversation_id = create_response.json()["id"]
 
-        # User 2 tries to access it
+        # User 2 tries to access it - should get 403 (exists but forbidden)
         response = await second_authenticated_client.get(
             f"/conversations/{conversation_id}"
         )
-        assert response.status_code == 404
+        assert response.status_code == 403
 
 
 @pytest.mark.integration
@@ -382,12 +382,12 @@ class TestSendMessage:
     async def test_send_message_conversation_not_found(
         self, authenticated_client: AsyncClient
     ):
-        """Verify 403 for non-existent conversation."""
+        """Verify 404 for non-existent conversation."""
         fake_id = str(ObjectId())
         response = await authenticated_client.post(
             f"/conversations/{fake_id}/messages", json={"content": "Hello"}
         )
-        assert response.status_code == 403
+        assert response.status_code == 404
 
     async def test_send_message_user_isolation(
         self, authenticated_client: AsyncClient, second_authenticated_client: AsyncClient
@@ -748,4 +748,211 @@ class TestContextMetrics:
         # Total should be sum of all message tokens
         total_from_messages = sum(msg["tokens_used"] for msg in messages)
         assert data["conversation"]["total_tokens_used"] == total_from_messages
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+class TestModelSwitching:
+    """Tests for the PATCH /conversations/{id}/model endpoint."""
+
+    async def test_switch_model_success(self, authenticated_client: AsyncClient):
+        """Verify switching model works and recalculates context metrics."""
+        # Create a conversation with gpt-3.5-turbo (16K context)
+        create_response = await authenticated_client.post(
+            "/conversations",
+            json={
+                "provider": "openai",
+                "model_name": OpenAIModels.GPT_3_5_TURBO.value,
+                "first_message": "Hello",
+            },
+        )
+        conversation_id = create_response.json()["id"]
+
+        # Send a message to add some token usage
+        await authenticated_client.post(
+            f"/conversations/{conversation_id}/messages",
+            json={"content": "Tell me about Python", "context_limit_tokens": 1000},
+        )
+
+        # Get current conversation state
+        get_response = await authenticated_client.get(f"/conversations/{conversation_id}")
+        initial_data = get_response.json()
+        initial_tokens_used = initial_data["total_tokens_used"]
+
+        # Switch to gpt-4-turbo (128K context)
+        switch_response = await authenticated_client.patch(
+            f"/conversations/{conversation_id}/model",
+            json={"model": OpenAIModels.GPT_4_TURBO.value},
+        )
+        assert switch_response.status_code == 200
+        switch_data = switch_response.json()
+
+        # Verify model was switched
+        assert switch_data["model_name"] == OpenAIModels.GPT_4_TURBO.value
+
+        # Verify context size was updated (gpt-4-turbo has 128K context)
+        gpt4_turbo_limit = MODEL_CONFIGS[OpenAIModels.GPT_4_TURBO].context_limit
+        assert switch_data["total_context_size"] == gpt4_turbo_limit
+
+        # Verify remaining context was recalculated
+        expected_remaining = gpt4_turbo_limit - initial_tokens_used
+        assert switch_data["remaining_context_size"] == expected_remaining
+
+        # Verify percentages were recalculated
+        expected_used_percentage = (initial_tokens_used / gpt4_turbo_limit) * 100
+        expected_remaining_percentage = 100 - expected_used_percentage
+        assert abs(switch_data["total_used_percentage"] - expected_used_percentage) < 0.01
+        assert abs(switch_data["remaining_percentage"] - expected_remaining_percentage) < 0.01
+
+        # Verify token usage remains unchanged
+        assert switch_data["total_tokens_used"] == initial_tokens_used
+
+        # Verify other fields unchanged
+        assert switch_data["title"] == initial_data["title"]
+        assert switch_data["message_count"] == initial_data["message_count"]
+        assert switch_data["provider"] == initial_data["provider"]
+        assert switch_data["id"] == conversation_id
+
+        # Verify updated_at was updated
+        initial_updated_at = datetime.fromisoformat(initial_data["updated_at"].replace("Z", "+00:00"))
+        new_updated_at = datetime.fromisoformat(switch_data["updated_at"].replace("Z", "+00:00"))
+        assert new_updated_at >= initial_updated_at
+
+    async def test_switch_model_invalid_model(self, authenticated_client: AsyncClient):
+        """Verify 400 error for invalid model name."""
+        # Create a conversation
+        create_response = await authenticated_client.post(
+            "/conversations",
+            json={
+                "provider": "openai",
+                "model_name": OpenAIModels.GPT_4O_MINI.value,
+                "first_message": "Hello",
+            },
+        )
+        conversation_id = create_response.json()["id"]
+
+        # Try to switch to invalid model
+        response = await authenticated_client.patch(
+            f"/conversations/{conversation_id}/model",
+            json={"model": "invalid-model-name"},
+        )
+        assert response.status_code == 400
+        error_data = response.json()
+        assert "Invalid model name" in error_data["detail"]
+
+    async def test_switch_model_not_found(self, authenticated_client: AsyncClient):
+        """Verify 404 error for non-existent conversation."""
+        fake_id = str(ObjectId())
+        response = await authenticated_client.patch(
+            f"/conversations/{fake_id}/model",
+            json={"model": OpenAIModels.GPT_4_TURBO.value},
+        )
+        assert response.status_code == 404
+
+    async def test_switch_model_user_isolation(self, authenticated_client: AsyncClient, second_authenticated_client: AsyncClient):
+        """Verify users cannot switch models in other users' conversations."""
+        # User 1 creates a conversation
+        create_response = await authenticated_client.post(
+            "/conversations",
+            json={
+                "provider": "openai",
+                "model_name": OpenAIModels.GPT_4O_MINI.value,
+                "first_message": "User 1 message",
+            },
+        )
+        conversation_id = create_response.json()["id"]
+
+        # User 2 tries to switch the model
+        response = await second_authenticated_client.patch(
+            f"/conversations/{conversation_id}/model",
+            json={"model": OpenAIModels.GPT_4_TURBO.value},
+        )
+        assert response.status_code == 403
+
+    async def test_switch_model_same_model(self, authenticated_client: AsyncClient):
+        """Verify switching to the same model still recalculates metrics."""
+        # Create a conversation
+        create_response = await authenticated_client.post(
+            "/conversations",
+            json={
+                "provider": "openai",
+                "model_name": OpenAIModels.GPT_4O_MINI.value,
+                "first_message": "Hello",
+            },
+        )
+        conversation_id = create_response.json()["id"]
+
+        # Add some token usage
+        await authenticated_client.post(
+            f"/conversations/{conversation_id}/messages",
+            json={"content": "Tell me about Python", "context_limit_tokens": 1000},
+        )
+
+        # Get initial state
+        get_response = await authenticated_client.get(f"/conversations/{conversation_id}")
+        initial_data = get_response.json()
+
+        # Switch to the same model
+        switch_response = await authenticated_client.patch(
+            f"/conversations/{conversation_id}/model",
+            json={"model": OpenAIModels.GPT_4O_MINI.value},
+        )
+        assert switch_response.status_code == 200
+        switch_data = switch_response.json()
+
+        # Model should remain the same
+        assert switch_data["model_name"] == OpenAIModels.GPT_4O_MINI.value
+
+        # But metrics should still be recalculated (in case they were out of sync)
+        gpt4o_mini_limit = MODEL_CONFIGS[OpenAIModels.GPT_4O_MINI].context_limit
+        assert switch_data["total_context_size"] == gpt4o_mini_limit
+
+        expected_remaining = gpt4o_mini_limit - switch_data["total_tokens_used"]
+        assert switch_data["remaining_context_size"] == expected_remaining
+
+    async def test_switch_model_preserves_conversation_data(self, authenticated_client: AsyncClient):
+        """Verify all conversation data except model/metrics is preserved."""
+        # Create conversation and add some messages
+        create_response = await authenticated_client.post(
+            "/conversations",
+            json={
+                "provider": "openai",
+                "model_name": OpenAIModels.GPT_3_5_TURBO.value,
+                "first_message": "First message",
+            },
+        )
+        conversation_id = create_response.json()["id"]
+
+        # Add a second message
+        await authenticated_client.post(
+            f"/conversations/{conversation_id}/messages",
+            json={"content": "Second message", "context_limit_tokens": 1000},
+        )
+
+        # Get initial state
+        get_response = await authenticated_client.get(f"/conversations/{conversation_id}")
+        initial_data = get_response.json()
+
+        # Switch model
+        switch_response = await authenticated_client.patch(
+            f"/conversations/{conversation_id}/model",
+            json={"model": OpenAIModels.GPT_4_TURBO.value},
+        )
+        switch_data = switch_response.json()
+
+        # Verify preserved fields
+        assert switch_data["id"] == initial_data["id"]
+        assert switch_data["user_id"] == initial_data["user_id"]
+        assert switch_data["title"] == initial_data["title"]
+        assert switch_data["provider"] == initial_data["provider"]
+        assert switch_data["message_count"] == initial_data["message_count"]
+        assert switch_data["total_tokens_used"] == initial_data["total_tokens_used"]
+        assert switch_data["created_at"] == initial_data["created_at"]
+
+        # Verify changed fields
+        assert switch_data["model_name"] == OpenAIModels.GPT_4_TURBO.value
+        assert switch_data["total_context_size"] != initial_data["total_context_size"]
+        assert switch_data["remaining_context_size"] != initial_data["remaining_context_size"]
+        assert switch_data["total_used_percentage"] != initial_data["total_used_percentage"]
+        assert switch_data["remaining_percentage"] != initial_data["remaining_percentage"]
 

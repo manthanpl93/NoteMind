@@ -275,7 +275,85 @@ curl -X POST http://localhost:8000/conversations/507f1f77bcf86cd799439011/messag
 
 ---
 
-### 5. Delete Conversation
+### 5. Switch Model
+
+Switch the language model used in an existing conversation. Automatically recalculates context limits and percentages based on the new model's capabilities.
+
+**Endpoint:** `PATCH /conversations/{conversation_id}/model`
+
+**Path Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| conversation_id | string | MongoDB ObjectId of the conversation |
+
+**Request Body:**
+
+```json
+{
+  "model": "gpt-4-turbo"
+}
+```
+
+**Parameters:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| model | string | Yes | New model name to switch to (must be a valid supported model) |
+
+**Response:** `200 OK`
+
+```json
+{
+  "id": "507f1f77bcf86cd799439011",
+  "user_id": "507f1f77bcf86cd799439012",
+  "title": "Understanding Quantum Computing",
+  "provider": "openai",
+  "model_name": "gpt-4-turbo",
+  "message_count": 12,
+  "total_tokens_used": 1543,
+  "total_context_size": 128000,
+  "remaining_context_size": 126457,
+  "total_used_percentage": 1.21,
+  "remaining_percentage": 98.79,
+  "created_at": "2024-01-06T12:00:00Z",
+  "updated_at": "2024-01-06T12:35:00Z"
+}
+```
+
+**Features:**
+- Validates model name is supported
+- Automatically recalculates context limits based on new model
+- Updates percentages based on current token usage
+- Preserves all existing conversation data
+- User can only modify their own conversations
+
+**Supported Models:**
+
+See the [Supported Models](#supported-models) section above for all available models.
+
+**Context Recalculation:**
+
+When switching models, the API automatically:
+1. Gets the new model's context window size
+2. Calculates: `remaining_context_size = total_context_size - total_tokens_used`
+3. Calculates: `total_used_percentage = (total_tokens_used / total_context_size) * 100`
+4. Calculates: `remaining_percentage = 100 - total_used_percentage`
+
+**Example cURL:**
+
+```bash
+curl -X PATCH http://localhost:8000/conversations/507f1f77bcf86cd799439011/model \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-4-turbo"
+  }'
+```
+
+---
+
+### 6. Delete Conversation
 
 Permanently delete a conversation and all its messages.
 
@@ -396,21 +474,25 @@ Common errors:
    POST /conversations/{id}/messages
    → Receive AI responses
 
-3. View history
+3. Switch model (optional)
+   PATCH /conversations/{id}/model
+   → Change to different model, auto-recalculate context limits
+
+4. View history
    GET /conversations/{id}
    → See full message history
-   
+
    Or use pagination:
    GET /conversations/{id}/messages?skip=0&limit=50
    → Get paginated messages
 
-4. Manage messages (optional)
+5. Manage messages (optional)
    GET /conversations/{id}/messages - Paginated messages
    PATCH /messages/{message_id} - Edit user messages
    DELETE /messages/{message_id} - Delete messages
    See [Messages API](messages.md) for details
 
-5. Cleanup
+6. Cleanup
    DELETE /conversations/{id}
 ```
 
@@ -449,11 +531,12 @@ Common errors:
 ## Best Practices
 
 1. **Choose the right model** for your use case
-2. **Use token limits** to control costs
-3. **Monitor token usage** regularly
-4. **Set meaningful context limits** based on conversation complexity
-5. **Handle errors gracefully** (API failures, rate limits)
-6. **Clean up** unused conversations
+2. **Switch models mid-conversation** if you need different capabilities (e.g., from gpt-4o-mini to gpt-4-turbo for complex reasoning)
+3. **Use token limits** to control costs
+4. **Monitor token usage** regularly
+5. **Set meaningful context limits** based on conversation complexity
+6. **Handle errors gracefully** (API failures, rate limits)
+7. **Clean up** unused conversations
 
 ---
 

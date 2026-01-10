@@ -10,6 +10,7 @@ from models.conversation import (
     ConversationListItem,
     ConversationResponse,
     Message,
+    ModelSwitchRequest,
     SendMessageRequest,
     SendMessageResponse,
 )
@@ -23,6 +24,8 @@ from utils.llm import (
     generate_title_from_message,
     get_messages_within_token_limit,
 )
+from utils.model_config import get_model_context_limit, get_model_info
+from utils.conversation_deps import verify_conversation_ownership
 
 router = APIRouter(prefix="/conversations", tags=["conversations"])
 
@@ -182,37 +185,15 @@ async def list_conversations(
     description="Retrieves the complete conversation including all messages and metadata."
 )
 async def get_conversation(
-    conversation_id: str,
-    current_user: dict = Depends(get_current_user),
-    db: Any = Depends(get_database)
+    conversation: dict = Depends(verify_conversation_ownership)
 ):
     """
     Get a specific conversation by ID.
-    
+
     Returns the complete conversation with full message history.
     Users can only access their own conversations.
     """
-    user_id = current_user["user_id"]
-    
-    # Validate ObjectId format
-    if not ObjectId.is_valid(conversation_id):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Conversation not found"
-        )
-    
-    # Find conversation
-    conversation = await db.conversations.find_one({
-        "_id": ObjectId(conversation_id),
-        "user_id": ObjectId(user_id)
-    })
-    
-    if not conversation:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Conversation not found"
-        )
-    
+    # conversation is already validated and fetched!
     return ConversationResponse(
         id=str(conversation["_id"]),
         user_id=str(conversation["user_id"]),
@@ -238,17 +219,17 @@ async def get_conversation(
                 "Supports token-based context limiting to control conversation history sent to the model."
 )
 async def send_message(
-    conversation_id: str,
     request: SendMessageRequest,
-    current_user: dict = Depends(get_current_user),
-    db: Any = Depends(get_database)
+    conversation: dict = Depends(verify_conversation_ownership),
+    current_user: dict = Depends(get_current_user),  # Still needed for user_id
+    db: Any = Depends(get_database)  # Still needed for messages
 ):
     """
     Send a message to an existing conversation and get an AI response.
-    
+
     - **content**: The message content to send
     - **context_limit_tokens**: Maximum tokens from conversation history to include (default: 4000)
-    
+
     The API will:
     1. Add your message to the conversation
     2. Load recent messages within the token limit
@@ -257,25 +238,7 @@ async def send_message(
     5. Update token usage and timestamps
     """
     user_id = current_user["user_id"]
-    
-    # Validate ObjectId format
-    if not ObjectId.is_valid(conversation_id):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Conversation not found"
-        )
-    
-    # Find conversation and verify ownership
-    conversation = await db.conversations.find_one({
-        "_id": ObjectId(conversation_id),
-        "user_id": ObjectId(user_id)
-    })
-    
-    if not conversation:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You don't have permission to access this conversation"
-        )
+    conversation_id = conversation["_id"]  # Already validated!
     
     # Get current message count to determine sequence numbers
     current_message_count = conversation.get("message_count", 0)
@@ -398,6 +361,85 @@ async def send_message(
     )
 
 
+@router.patch(
+    "/{conversation_id}/model",
+    response_model=ConversationResponse,
+    summary="Switch the model for a conversation",
+    description="Switches the language model used in a conversation. "
+                "Automatically recalculates context limits and percentages based on the new model's capabilities."
+)
+async def switch_conversation_model(
+    request: ModelSwitchRequest,
+    conversation: dict = Depends(verify_conversation_ownership),
+    db: Any = Depends(get_database)  # Still needed for updates
+):
+    """
+    Switch the model used in an existing conversation.
+
+    - **model**: New model name to switch to (must be a valid model name)
+
+    The API will:
+    1. Validate the model name is supported
+    2. Update the conversation's model
+    3. Recalculate context limits and percentages based on the new model
+    4. Update the conversation's timestamp
+
+    Users can only modify their own conversations.
+    """
+    conversation_id = conversation["_id"]  # Already validated!
+
+    # Validate the new model name
+    model_info = get_model_info(request.model)
+    if not model_info:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid model name: {request.model}"
+        )
+
+    # Get the new context limit
+    new_context_limit = get_model_context_limit(request.model)
+    total_tokens_used = conversation.get("total_tokens_used", 0)
+
+    # Calculate updated context metrics
+    remaining_context_size = new_context_limit - total_tokens_used
+    total_used_percentage = (total_tokens_used / new_context_limit) * 100 if new_context_limit > 0 else 0
+    remaining_percentage = 100 - total_used_percentage
+
+    # Update the conversation
+    await db.conversations.update_one(
+        {"_id": ObjectId(conversation_id)},
+        {
+            "$set": {
+                "model_name": request.model,
+                "total_context_size": new_context_limit,
+                "remaining_context_size": remaining_context_size,
+                "total_used_percentage": total_used_percentage,
+                "remaining_percentage": remaining_percentage,
+                "updated_at": datetime.utcnow()
+            }
+        }
+    )
+
+    # Fetch the updated conversation
+    updated_conversation = await db.conversations.find_one({"_id": ObjectId(conversation_id)})
+
+    return ConversationResponse(
+        id=str(updated_conversation["_id"]),
+        user_id=str(updated_conversation["user_id"]),
+        title=updated_conversation["title"],
+        provider=updated_conversation["provider"],
+        model_name=updated_conversation["model_name"],
+        message_count=updated_conversation.get("message_count", 0),
+        total_tokens_used=updated_conversation.get("total_tokens_used", 0),
+        total_context_size=updated_conversation.get("total_context_size", 0),
+        remaining_context_size=updated_conversation.get("remaining_context_size", 0),
+        total_used_percentage=updated_conversation.get("total_used_percentage", 0.0),
+        remaining_percentage=updated_conversation.get("remaining_percentage", 100.0),
+        created_at=updated_conversation["created_at"],
+        updated_at=updated_conversation["updated_at"]
+    )
+
+
 @router.delete(
     "/{conversation_id}",
     status_code=status.HTTP_204_NO_CONTENT,
@@ -405,51 +447,23 @@ async def send_message(
     description="Permanently deletes a conversation and all its messages."
 )
 async def delete_conversation(
-    conversation_id: str,
-    current_user: dict = Depends(get_current_user),
-    db: Any = Depends(get_database)
+    conversation: dict = Depends(verify_conversation_ownership),
+    db: Any = Depends(get_database)  # Still needed for deletion
 ):
     """
     Delete a conversation.
-    
+
     This is a permanent deletion - the conversation and all its messages will be removed.
     Users can only delete their own conversations.
     """
-    user_id = current_user["user_id"]
-    
-    # Validate ObjectId format
-    if not ObjectId.is_valid(conversation_id):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Conversation not found"
-        )
-    
-    # Find conversation to verify ownership
-    conversation = await db.conversations.find_one({
-        "_id": ObjectId(conversation_id),
-        "user_id": ObjectId(user_id)
-    })
-    
-    if not conversation:
-        # Check if conversation exists at all
-        exists = await db.conversations.find_one({"_id": ObjectId(conversation_id)})
-        if exists:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You don't have permission to delete this conversation"
-            )
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Conversation not found"
-            )
-    
+    conversation_id = conversation["_id"]  # Already validated!
+
     # Cascade delete: Delete all messages for this conversation
     await db.messages.delete_many({"conversation_id": ObjectId(conversation_id)})
-    
+
     # Delete the conversation
     await db.conversations.delete_one({"_id": ObjectId(conversation_id)})
-    
+
     return None
 
 
