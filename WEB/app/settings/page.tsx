@@ -1,33 +1,16 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useEffect } from 'react'
 import { useSession } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import { Brain } from 'lucide-react'
 import { AppLayout } from '../components/AppLayout'
+import { useApiKeys } from '../hooks/useApiKeys'
 
 export default function SettingsPage() {
   const { data: session, status } = useSession()
   const router = useRouter()
-  // Settings state
-  const [apiKeys, setApiKeys] = useState({
-    'openai': '',
-    'anthropic': '',
-    'google': '',
-  })
-
-  // Load API keys from localStorage on mount
-  useEffect(() => {
-    const savedKeys = localStorage.getItem('notemind_api_keys')
-    if (savedKeys) {
-      try {
-        const parsed = JSON.parse(savedKeys)
-        setApiKeys(parsed)
-      } catch (error) {
-        console.error('Failed to parse saved API keys:', error)
-      }
-    }
-  }, [])
+  const { apiKeys, isLoading, isSaving, error, updateKeys } = useApiKeys()
 
   // Redirect to login if not authenticated
   useEffect(() => {
@@ -66,8 +49,18 @@ export default function SettingsPage() {
             <div className="mb-6">
               <h3 className="text-xl font-semibold text-gray-900 mb-2">API Keys</h3>
               <p className="text-sm text-gray-600">
-                Configure your API keys to use different AI models. Your keys are stored locally and never sent to our servers.
+                Configure your API keys to use different AI models. Your keys are encrypted and stored securely on our servers.
               </p>
+              {(isLoading || isSaving) && (
+                <div className="mt-2 text-sm text-purple-600">
+                  {isLoading ? 'Loading...' : 'Saving...'}
+                </div>
+              )}
+              {error && (
+                <div className="mt-2 text-sm text-red-600">
+                  Error: {error}
+                </div>
+              )}
             </div>
 
             <div className="space-y-6">
@@ -83,12 +76,11 @@ export default function SettingsPage() {
                   type="password"
                   value={apiKeys.openai}
                   onChange={(e) => {
-                    const newKeys = { ...apiKeys, openai: e.target.value }
-                    setApiKeys(newKeys)
-                    localStorage.setItem('notemind_api_keys', JSON.stringify(newKeys))
+                    updateKeys({ openai: e.target.value })
                   }}
                   placeholder="sk-..."
-                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-600 focus:border-transparent outline-none text-sm font-mono"
+                  disabled={isLoading || isSaving}
+                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-600 focus:border-transparent outline-none text-sm font-mono disabled:opacity-50 disabled:cursor-not-allowed"
                 />
               </div>
 
@@ -104,12 +96,11 @@ export default function SettingsPage() {
                   type="password"
                   value={apiKeys.anthropic}
                   onChange={(e) => {
-                    const newKeys = { ...apiKeys, anthropic: e.target.value }
-                    setApiKeys(newKeys)
-                    localStorage.setItem('notemind_api_keys', JSON.stringify(newKeys))
+                    updateKeys({ anthropic: e.target.value })
                   }}
                   placeholder="sk-ant-..."
-                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-600 focus:border-transparent outline-none text-sm font-mono"
+                  disabled={isLoading || isSaving}
+                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-600 focus:border-transparent outline-none text-sm font-mono disabled:opacity-50 disabled:cursor-not-allowed"
                 />
               </div>
 
@@ -125,12 +116,11 @@ export default function SettingsPage() {
                   type="password"
                   value={apiKeys.google}
                   onChange={(e) => {
-                    const newKeys = { ...apiKeys, google: e.target.value }
-                    setApiKeys(newKeys)
-                    localStorage.setItem('notemind_api_keys', JSON.stringify(newKeys))
+                    updateKeys({ google: e.target.value })
                   }}
                   placeholder="AIza..."
-                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-600 focus:border-transparent outline-none text-sm font-mono"
+                  disabled={isLoading || isSaving}
+                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-600 focus:border-transparent outline-none text-sm font-mono disabled:opacity-50 disabled:cursor-not-allowed"
                 />
               </div>
             </div>
