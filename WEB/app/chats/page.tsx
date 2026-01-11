@@ -3,16 +3,22 @@
 import { useState, useEffect } from 'react'
 import { useSession } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
+import { useFolders } from '../hooks/useFolders'
+import { useConversations } from '../hooks/useConversations'
+import { foldersApi } from '@/lib/api/folders'
+import type { Folder, Conversation } from '@/lib/api/types'
 import {
   Brain,
   Plus,
   MessageSquare,
   Folder,
   ChevronRight,
-  X
+  X,
+  FolderPlus
 } from 'lucide-react'
 import { ChatComponent } from '../components/Chat'
 import { AppLayout } from '../components/AppLayout'
+import { Dialog } from '../components/Dialog'
 
 interface ChatMessage {
   id: string
@@ -25,61 +31,51 @@ interface ChatMessage {
 interface Chat {
   id: string
   title: string
-  messages: ChatMessage[]
-  createdAt: string
-  updatedAt: string
-  folderId?: string
+  provider: 'openai' | 'anthropic' | 'google'
+  model_name: string
+  message_count: number
+  total_tokens_used: number
+  folder_id: string | null
+  created_at: string
+  updated_at: string
+  messages?: ChatMessage[] // Optional for compatibility
 }
 
 interface ChatFolder {
   id: string
   name: string
-  chats: Chat[]
+  created_at: string
+  updated_at: string
+  chats: Chat[] // For compatibility, keeping chats array but will be empty
 }
 
 export default function ChatsPage() {
   const { data: session, status } = useSession()
   const router = useRouter()
-  // Chat-related state
-  const [chatFolders, setChatFolders] = useState<ChatFolder[]>([
-    {
-      id: 'folder-1',
-      name: 'AI Development',
-      chats: [
-        {
-          id: 'chat-1',
-          title: 'React Best Practices',
-          messages: [
-            { id: 'msg-1', role: 'user', content: 'What are the best practices for React hooks?', timestamp: '2025-11-26 10:30' },
-            { id: 'msg-2', role: 'assistant', content: 'Here are some key best practices for React hooks:\n\n1. **Always call hooks at the top level** - Never call hooks inside loops, conditions, or nested functions.\n\n2. **Only call hooks from React functions** - Call them from functional components or custom hooks.\n\n3. **Use ESLint plugin** - Install eslint-plugin-react-hooks to catch common mistakes.\n\n4. **Custom hooks naming** - Always start with "use" (e.g., useForm, useAuth).\n\n5. **Optimize with useMemo and useCallback** - Prevent unnecessary re-renders.\n\nWould you like me to elaborate on any of these?', timestamp: '2025-11-26 10:31' }
-          ],
-          createdAt: '2025-11-26',
-          updatedAt: '2025-11-26',
-          folderId: 'folder-1'
-        }
-      ]
-    },
-    {
-      id: 'folder-2',
-      name: 'General',
-      chats: []
-    }
-  ])
-  const [unorganizedChats, setUnorganizedChats] = useState<Chat[]>([
-    {
-      id: 'chat-2',
-      title: 'Getting Started with TypeScript',
-      messages: [
-        { id: 'msg-3', role: 'user', content: 'How do I start with TypeScript?', timestamp: '2025-11-25 14:20' },
-        { id: 'msg-4', role: 'assistant', content: 'Great question! Here\'s how to get started with TypeScript:\n\n1. Install TypeScript: `npm install -g typescript`\n2. Create a tsconfig.json file\n3. Write your first .ts file\n4. Compile with `tsc filename.ts`\n\nWould you like a detailed tutorial?', timestamp: '2025-11-25 14:21' }
-      ],
-      createdAt: '2025-11-25',
-      updatedAt: '2025-11-25'
-    }
-  ])
+  // Chat-related state (keeping for now)
   const [activeChat, setActiveChat] = useState<string | null>(null)
   const [selectedModel, setSelectedModel] = useState<string>('gpt-4')
   const [activeChatFolder, setActiveChatFolder] = useState<string | null>(null)
+  const [isCreatingFolder, setIsCreatingFolder] = useState(false)
+  const [newFolderName, setNewFolderName] = useState('')
+
+  // API hooks for data
+  const { folders, loading: foldersLoading, error: foldersError, refetch: refetchFolders } = useFolders()
+  const { conversations: unorganizedChats, loading: chatsLoading, error: chatsError } = useConversations('null')
+
+  // Hook for folder conversations (loaded when viewing a folder)
+  const { conversations: folderChats, loading: folderChatsLoading } = useConversations(
+    activeChatFolder || undefined
+  )
+
+  // Transform folders to match existing component interface
+  const chatFolders: ChatFolder[] = folders.map(folder => ({
+    id: folder.id,
+    name: folder.name,
+    created_at: folder.created_at,
+    updated_at: folder.updated_at,
+    chats: [] // Will be populated when folder is opened
+  }))
   
   // Tab management state
   interface ChatTab {
@@ -147,23 +143,9 @@ export default function ChatsPage() {
 
   // Tab management functions
   const handleOpenChatTab = (chatId: string | null) => {
-    // Check if tab already exists
-    const existingTab = openChatTabs.find(tab => tab.chatId === chatId)
-    if (existingTab) {
-      setActiveChatTabId(existingTab.id)
-      setActiveChat(chatId)
-      return
-    }
-    
-    // Create new tab
-    const newTab: ChatTab = {
-      id: `tab-${Date.now()}`,
-      chatId
-    }
-    
-    setOpenChatTabs([...openChatTabs, newTab])
-    setActiveChatTabId(newTab.id)
-    setActiveChat(chatId)
+    // Chat opening functionality will be implemented in a future phase
+    console.log('Chat opening disabled for now - will be implemented later')
+    // TODO: Show a toast message or tooltip indicating chat opening is not available yet
   }
 
   const handleBackToChats = () => {
@@ -198,77 +180,31 @@ export default function ChatsPage() {
   }
 
   const handleCreateNewChatTab = () => {
-    const newChat: Chat = {
-      id: `chat-${Date.now()}`,
-      title: 'New Chat',
-      messages: [],
-      createdAt: new Date().toISOString().split('T')[0],
-      updatedAt: new Date().toISOString().split('T')[0]
-    }
-    setUnorganizedChats([newChat, ...unorganizedChats])
-    handleOpenChatTab(newChat.id)
+    // Creating new conversations will be implemented in a future phase
+    console.log('Creating new conversations disabled for now - will be implemented later')
+    // TODO: Show a toast message indicating this feature is not available yet
   }
 
-  const handleMoveChatToFolder = (chatId: string, folderId: string | null) => {
-    // Find the chat in all folders and unorganized
-    let chatToMove: Chat | null = null
-    let sourceFolderId: string | null = null
+  // handleMoveChatToFolder removed - moving chats not in scope
 
-    // Check in folders
-    for (const folder of chatFolders) {
-      const chat = folder.chats.find(c => c.id === chatId)
-      if (chat) {
-        chatToMove = chat
-        sourceFolderId = folder.id
-        break
-      }
-    }
-
-    // Check in unorganized
-    if (!chatToMove) {
-      const chat = unorganizedChats.find(c => c.id === chatId)
-      if (chat) {
-        chatToMove = chat
-      }
-    }
-
-    if (!chatToMove) return
-
-    // Remove from source
-    if (sourceFolderId) {
-      // Remove from folder
-      setChatFolders(chatFolders.map(folder => 
-        folder.id === sourceFolderId
-          ? { ...folder, chats: folder.chats.filter(c => c.id !== chatId) }
-          : folder
-      ))
-    } else {
-      // Remove from unorganized
-      setUnorganizedChats(unorganizedChats.filter(c => c.id !== chatId))
-    }
-
-    // Add to destination
-    if (folderId) {
-      // Add to folder
-      setChatFolders(chatFolders.map(folder =>
-        folder.id === folderId
-          ? { ...folder, chats: [...folder.chats, { ...chatToMove!, folderId }] }
-          : folder
-      ))
-    } else {
-      // Add to unorganized
-      const { folderId: _, ...chatWithoutFolder } = chatToMove
-      setUnorganizedChats([chatWithoutFolder, ...unorganizedChats])
+  const handleCreateChatFolder = async (folderName: string) => {
+    try {
+      await foldersApi.create(folderName)
+      // Refresh folders list to show the new folder
+      refetchFolders()
+    } catch (error) {
+      console.error('Failed to create folder:', error)
+      // TODO: Show error message to user
     }
   }
 
-  const handleCreateChatFolder = (folderName: string) => {
-    const newFolder: ChatFolder = {
-      id: `folder-${Date.now()}`,
-      name: folderName,
-      chats: []
+  const handleSubmitFolder = (e: React.FormEvent) => {
+    e.preventDefault()
+    if (newFolderName.trim()) {
+      handleCreateChatFolder(newFolderName.trim())
+      setIsCreatingFolder(false)
+      setNewFolderName('')
     }
-    setChatFolders([...chatFolders, newFolder])
   }
 
   // If chat is active, show chat interface
@@ -355,7 +291,6 @@ export default function ChatsPage() {
             onCloseTab={handleCloseChatTab}
             onSwitchTab={handleSwitchChatTab}
             onCreateNewChat={handleCreateNewChatTab}
-            onMoveChatToFolder={handleMoveChatToFolder}
             onCreateFolder={handleCreateChatFolder}
           />
         </div>
@@ -394,24 +329,30 @@ export default function ChatsPage() {
                         </div>
                         <div>
                           <h2 className="text-2xl font-bold text-gray-900">{folder.name}</h2>
-                          <p className="text-sm text-gray-600">{folder.chats.length} chat{folder.chats.length !== 1 ? 's' : ''}</p>
+                          <p className="text-sm text-gray-600">{folderChats.length} chat{folderChats.length !== 1 ? 's' : ''}</p>
                         </div>
                       </div>
                       <button
                         onClick={handleCreateNewChatTab}
-                        className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors font-medium inline-flex items-center gap-2"
+                        className="px-3 py-1.5 text-sm bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors font-medium inline-flex items-center gap-1.5"
                       >
-                        <Plus className="h-4 w-4" />
+                        <Plus className="h-3.5 w-3.5" />
                         New Chat
                       </button>
                     </div>
                   </div>
 
                   {/* Chats in this folder */}
-                  {folder.chats.length > 0 ? (
+                  {folderChatsLoading ? (
+                    <div className="space-y-2">
+                      {[1, 2, 3].map(i => (
+                        <div key={i} className="animate-pulse bg-gray-200 h-12 rounded-lg" />
+                      ))}
+                    </div>
+                  ) : folderChats.length > 0 ? (
                     <div className="bg-white rounded-lg border border-gray-200 divide-y divide-gray-200">
-                      {folder.chats
-                        .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+                      {folderChats
+                        .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
                         .map((chat) => (
                         <button
                           key={chat.id}
@@ -424,9 +365,9 @@ export default function ChatsPage() {
                               {chat.title}
                             </h4>
                             <div className="flex items-center gap-3 mt-0.5">
-                              <span className="text-xs text-gray-500">{chat.updatedAt}</span>
+                              <span className="text-xs text-gray-500">{new Date(chat.updated_at).toLocaleDateString()}</span>
                               <span className="text-xs text-gray-400">•</span>
-                              <span className="text-xs text-gray-500">{chat.messages.length} msg{chat.messages.length !== 1 ? 's' : ''}</span>
+                              <span className="text-xs text-gray-500">{chat.message_count} msg{chat.message_count !== 1 ? 's' : ''}</span>
                             </div>
                           </div>
                         </button>
@@ -445,6 +386,7 @@ export default function ChatsPage() {
           ) : (
             // Main view - show all folders and unorganized chats
             <>
+              {/* Header with action buttons */}
               <div className="mb-6 flex items-start justify-between">
                 <div>
                   <h2 className="text-2xl font-bold text-gray-900 mb-1">All Chats</h2>
@@ -452,38 +394,105 @@ export default function ChatsPage() {
                     Manage and organize your conversations
                   </p>
                 </div>
-                <button
-                  onClick={handleCreateNewChatTab}
-                  className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors font-medium inline-flex items-center gap-2"
-                >
-                  <Plus className="h-4 w-4" />
-                  New Chat
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setIsCreatingFolder(true)}
+                    className="px-3 py-1.5 text-sm bg-white text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50 hover:border-gray-400 transition-colors font-medium inline-flex items-center gap-1.5"
+                  >
+                    <FolderPlus className="h-3.5 w-3.5" />
+                    New Folder
+                  </button>
+                  <button
+                    onClick={handleCreateNewChatTab}
+                    className="px-3 py-1.5 text-sm bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors font-medium inline-flex items-center gap-1.5"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                    New Chat
+                  </button>
+                </div>
               </div>
 
-              {/* Chat Folders */}
-              {chatFolders.length > 0 && (
-                <div className="mb-6">
-                  <div className="flex items-center justify-between mb-3">
-                    <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wider flex items-center gap-2">
-                      <Folder className="h-4 w-4" />
-                      Organized Chats
-                    </h3>
+              {/* New Folder Dialog */}
+              <Dialog
+                open={isCreatingFolder}
+                onClose={() => {
+                  setIsCreatingFolder(false)
+                  setNewFolderName('')
+                }}
+                title="Create New Folder"
+              >
+                <form onSubmit={handleSubmitFolder} className="space-y-4">
+                  <div>
+                    <label htmlFor="folder-name" className="block text-sm font-medium text-gray-700 mb-2">
+                      Folder Name
+                    </label>
+                    <input
+                      id="folder-name"
+                      type="text"
+                      value={newFolderName}
+                      onChange={(e) => setNewFolderName(e.target.value)}
+                      placeholder="e.g., Work, Personal, Projects..."
+                      autoFocus
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent text-sm"
+                    />
                   </div>
+                  <div className="flex items-center gap-3 justify-end">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsCreatingFolder(false)
+                        setNewFolderName('')
+                      }}
+                      className="px-4 py-2 text-sm bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors font-medium"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={!newFolderName.trim()}
+                      className="px-4 py-2 text-sm bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Create Folder
+                    </button>
+                  </div>
+                </form>
+              </Dialog>
+
+              {/* Chat Folders */}
+              {foldersLoading ? (
+                <div className="mb-6">
+                  <div className="space-y-2">
+                    {[1, 2, 3].map(i => (
+                      <div key={i} className="animate-pulse bg-gray-200 h-16 rounded-lg" />
+                    ))}
+                  </div>
+                </div>
+              ) : foldersError ? (
+                <div className="mb-6 bg-red-50 border border-red-200 rounded-lg p-4">
+                  <p className="text-red-800 text-sm">Failed to load folders</p>
+                  <button
+                    onClick={refetchFolders}
+                    className="text-red-600 text-sm font-medium mt-2"
+                  >
+                    Retry
+                  </button>
+                </div>
+              ) : chatFolders.length > 0 ? (
+                <div className="mb-6">
                   <div className="bg-white rounded-lg border border-gray-200 divide-y divide-gray-200">
                     {chatFolders.map((folder) => (
                       <button
                         key={folder.id}
                         onClick={() => setActiveChatFolder(folder.id)}
-                        className="w-full flex items-center justify-between px-4 py-2.5 hover:bg-purple-50 transition-colors text-left group"
+                        className="w-full flex items-center justify-between px-4 py-3 hover:bg-purple-50 transition-colors text-left group"
                       >
                         <div className="flex items-center gap-3 flex-1 min-w-0">
-                          <div className="w-8 h-8 rounded bg-purple-100 text-purple-600 group-hover:bg-purple-200 flex items-center justify-center flex-shrink-0 transition-colors">
+                          <div className="w-9 h-9 rounded-lg bg-purple-100 text-purple-600 group-hover:bg-purple-200 flex items-center justify-center flex-shrink-0 transition-colors">
                             <Folder className="h-4 w-4" />
                           </div>
                           <div className="flex-1 min-w-0">
                             <h4 className="text-sm font-semibold text-gray-900 group-hover:text-purple-700 truncate transition-colors">{folder.name}</h4>
-                            <p className="text-xs text-gray-500">{folder.chats.length} chat{folder.chats.length !== 1 ? 's' : ''}</p>
+                            <p className="text-xs text-gray-500">Click to view conversations</p>
                           </div>
                         </div>
                         <ChevronRight className="h-4 w-4 text-gray-400 group-hover:text-purple-600 transition-colors flex-shrink-0" />
@@ -491,27 +500,39 @@ export default function ChatsPage() {
                     ))}
                   </div>
                 </div>
-              )}
+              ) : null}
 
-              {/* Unorganized Chats */}
-              {unorganizedChats.length > 0 && (
+              {/* Regular Chats (not in folders) */}
+              {chatsLoading ? (
                 <div>
-                  <div className="flex items-center justify-between mb-3">
-                    <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wider flex items-center gap-2">
-                      <MessageSquare className="h-4 w-4" />
-                      Unorganized Chats
-                    </h3>
+                  <div className="space-y-2">
+                    {[1, 2, 3].map(i => (
+                      <div key={i} className="animate-pulse bg-gray-200 h-16 rounded-lg" />
+                    ))}
                   </div>
+                </div>
+              ) : chatsError ? (
+                <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+                  <p className="text-red-800 text-sm">Failed to load conversations</p>
+                  <button
+                    onClick={() => window.location.reload()}
+                    className="text-red-600 text-sm font-medium mt-2"
+                  >
+                    Retry
+                  </button>
+                </div>
+              ) : unorganizedChats.length > 0 ? (
+                <div>
                   <div className="bg-white rounded-lg border border-gray-200 divide-y divide-gray-200">
                     {unorganizedChats
-                      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+                      .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
                       .map((chat) => (
                       <button
                         key={chat.id}
                         onClick={() => handleOpenChatTab(chat.id)}
-                        className="w-full group flex items-center gap-3 px-4 py-2.5 hover:bg-purple-50 transition-all text-left"
+                        className="w-full group flex items-center gap-3 px-4 py-3 hover:bg-purple-50 transition-all text-left"
                       >
-                        <div className="w-8 h-8 rounded bg-gray-100 text-gray-600 flex items-center justify-center group-hover:bg-purple-100 group-hover:text-purple-600 transition-colors flex-shrink-0">
+                        <div className="w-9 h-9 rounded-lg bg-gray-100 text-gray-600 flex items-center justify-center group-hover:bg-purple-100 group-hover:text-purple-600 transition-colors flex-shrink-0">
                           <MessageSquare className="h-4 w-4" />
                         </div>
                         <div className="flex-1 min-w-0">
@@ -519,16 +540,16 @@ export default function ChatsPage() {
                             {chat.title}
                           </h4>
                           <div className="flex items-center gap-3 mt-0.5">
-                            <span className="text-xs text-gray-500">{chat.updatedAt}</span>
+                            <span className="text-xs text-gray-500">{new Date(chat.updated_at).toLocaleDateString()}</span>
                             <span className="text-xs text-gray-400">•</span>
-                            <span className="text-xs text-gray-500">{chat.messages.length} message{chat.messages.length !== 1 ? 's' : ''}</span>
+                            <span className="text-xs text-gray-500">{chat.message_count} message{chat.message_count !== 1 ? 's' : ''}</span>
                           </div>
                         </div>
                       </button>
                     ))}
                   </div>
                 </div>
-              )}
+              ) : null}
 
               {/* Empty State */}
               {chatFolders.length === 0 && unorganizedChats.length === 0 && (
@@ -538,9 +559,9 @@ export default function ChatsPage() {
                   <p className="text-sm text-gray-600 mb-4">Start a new conversation to get started</p>
                   <button
                     onClick={handleCreateNewChatTab}
-                    className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors font-medium inline-flex items-center gap-2"
+                    className="px-3 py-1.5 text-sm bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors font-medium inline-flex items-center gap-1.5"
                   >
-                    <Plus className="h-4 w-4" />
+                    <Plus className="h-3.5 w-3.5" />
                     New Chat
                   </button>
                 </div>
