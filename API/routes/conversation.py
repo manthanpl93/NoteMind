@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from database import get_database
 from models.conversation import (
     ConversationCreate,
+    ConversationCreateResponse,
     ConversationListItem,
     ConversationResponse,
     Message,
@@ -17,6 +18,7 @@ from models.conversation import (
 from utils.auth import get_current_user
 from utils.llm import (
     Provider,
+    DEFAULT_SYSTEM_PROMPT,
     calculate_context_metrics,
     chat_with_model,
     count_messages_tokens,
@@ -58,12 +60,12 @@ router = APIRouter(prefix="/conversations", tags=["conversations"])
 
 @router.post(
     "/",
-    response_model=ConversationResponse,
+    response_model=ConversationCreateResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Create a new conversation",
     description="Creates a new conversation with the specified LLM provider and model. "
                 "The title is automatically generated using AI from the first message. "
-                "Token usage is tracked for the initial message."
+                "Token usage is tracked and the AI response is immediately returned."
 )
 async def create_conversation(
     validated_data: Tuple[ConversationCreate, Optional[ObjectId]] = Depends(validate_conversation_folder_access),
@@ -127,6 +129,22 @@ async def create_conversation(
     result = await db.conversations.insert_one(conversation_doc)
     conversation_id = result.inserted_id
     
+    # Get AI response for the first message
+    messages_for_llm = [{"role": "user", "content": conversation.first_message}]
+    try:
+        ai_response_content, input_tokens, output_tokens = await chat_with_model(
+            user_id=user_id,
+            provider=conversation.provider,
+            messages=messages_for_llm,
+            db=db,
+            model_name=conversation.model_name
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get AI response: {str(e)}"
+        )
+    
     # Insert first message into messages collection
     first_message_doc = {
         "conversation_id": conversation_id,
@@ -134,12 +152,64 @@ async def create_conversation(
         "role": "user",
         "content": conversation.first_message,
         "timestamp": now,
-        "tokens_used": 0,
+        "tokens_used": input_tokens,
         "sequence_number": 0
     }
     await db.messages.insert_one(first_message_doc)
     
-    return ConversationResponse(
+    # Insert AI response message
+    ai_timestamp = datetime.utcnow()
+    ai_message_doc = {
+        "conversation_id": conversation_id,
+        "user_id": ObjectId(user_id),
+        "role": "assistant",
+        "content": ai_response_content,
+        "timestamp": ai_timestamp,
+        "tokens_used": output_tokens,
+        "sequence_number": 1
+    }
+    await db.messages.insert_one(ai_message_doc)
+    
+    # Calculate total tokens and update conversation
+    total_tokens = input_tokens + output_tokens
+    context_metrics = calculate_context_metrics(total_tokens, conversation.model_name)
+    
+    # Update conversation document with correct message count and token usage
+    await db.conversations.update_one(
+        {"_id": conversation_id},
+        {
+            "$set": {
+                "message_count": 2,
+                "total_tokens_used": total_tokens,
+                **context_metrics,
+                "updated_at": ai_timestamp
+            }
+        }
+    )
+    
+    # Update conversation_doc for response
+    conversation_doc["message_count"] = 2
+    conversation_doc["total_tokens_used"] = total_tokens
+    conversation_doc.update(context_metrics)
+    conversation_doc["updated_at"] = ai_timestamp
+    
+    # Create user message response object
+    user_message = Message(
+        role="user",
+        content=conversation.first_message,
+        timestamp=now,
+        tokens_used=input_tokens
+    )
+    
+    # Create AI message response object
+    ai_message = Message(
+        role="assistant",
+        content=ai_response_content,
+        timestamp=ai_timestamp,
+        tokens_used=output_tokens
+    )
+    
+    return ConversationCreateResponse(
         id=str(conversation_id),
         user_id=str(conversation_doc["user_id"]),
         title=conversation_doc["title"],
@@ -153,7 +223,8 @@ async def create_conversation(
         remaining_percentage=conversation_doc["remaining_percentage"],
         folder_id=str(folder_id) if folder_id else None,
         created_at=conversation_doc["created_at"],
-        updated_at=conversation_doc["updated_at"]
+        updated_at=conversation_doc["updated_at"],
+        messages=[user_message, ai_message]
     )
 
 
@@ -321,10 +392,15 @@ async def send_message(
         "content": request.content
     })
     
+    # Reserve tokens for system prompt (approximately 200 tokens)
+    # This ensures the system prompt doesn't push us over the limit
+    SYSTEM_PROMPT_TOKEN_RESERVE = 200
+    effective_token_limit = max(0, request.context_limit_tokens - SYSTEM_PROMPT_TOKEN_RESERVE)
+    
     # Apply token-based context limiting
     messages_for_llm = get_messages_within_token_limit(
         messages_for_token_calc,
-        request.context_limit_tokens,
+        effective_token_limit,
         conversation["model_name"]
     )
     

@@ -253,6 +253,79 @@
   @apply text-xs p-2;
 }
 
+/* Enhanced prose styles for chat messages */
+.prose-chat {
+  @apply text-gray-800;
+}
+
+.prose-chat p {
+  @apply mb-3 leading-relaxed;
+}
+
+.prose-chat code {
+  @apply bg-purple-50 text-purple-700 px-2 py-0.5 rounded font-mono text-xs font-semibold border border-purple-200;
+}
+
+.prose-chat pre {
+  @apply bg-gradient-to-br from-gray-50 to-gray-100 p-4 rounded-lg overflow-x-auto mb-3 border border-gray-300 shadow-sm;
+}
+
+.prose-chat pre code {
+  @apply bg-transparent text-gray-800 p-0 border-0 font-normal;
+}
+
+.prose-chat blockquote {
+  @apply border-l-4 border-purple-500 bg-purple-50/50 pl-4 pr-3 py-2 italic text-gray-700 my-3 rounded-r;
+}
+
+.prose-chat ul {
+  @apply list-disc ml-5 mb-3 space-y-1.5;
+}
+
+.prose-chat ol {
+  @apply list-decimal ml-5 mb-3 space-y-1.5;
+}
+
+.prose-chat li {
+  @apply text-gray-800 leading-relaxed;
+}
+
+.prose-chat strong {
+  @apply font-semibold text-gray-900;
+}
+
+.prose-chat a {
+  @apply text-purple-600 hover:text-purple-700 underline decoration-purple-300 hover:decoration-purple-500 transition-colors;
+}
+
+.prose-chat h1 {
+  @apply text-lg font-bold text-gray-900 mb-2 mt-3;
+}
+
+.prose-chat h2 {
+  @apply text-base font-bold text-gray-900 mb-2 mt-3;
+}
+
+.prose-chat h3 {
+  @apply text-sm font-semibold text-gray-900 mb-1.5 mt-2.5;
+}
+
+.prose-chat table {
+  @apply w-full border-collapse border border-gray-300 my-3 text-xs shadow-sm rounded-lg overflow-hidden;
+}
+
+.prose-chat thead {
+  @apply bg-gray-100;
+}
+
+.prose-chat th {
+  @apply border border-gray-300 px-3 py-2 text-left font-semibold text-gray-700;
+}
+
+.prose-chat td {
+  @apply border border-gray-300 px-3 py-2 text-gray-800;
+}
+
 /* Inline diff highlighting styles */
 .diff-added {
   @apply bg-green-100 border-l-2 border-green-400 pl-1 pr-1;

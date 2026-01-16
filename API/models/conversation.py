@@ -81,6 +81,46 @@ class ConversationResponse(BaseModel):
         }
 
 
+class ConversationCreateResponse(ConversationResponse):
+    """Response model for creating a conversation with first messages."""
+    messages: list[Message] = Field(..., description="The initial messages (user + AI response)")
+
+    class Config:
+        from_attributes = True
+        json_schema_extra = {
+            "example": {
+                "id": "507f1f77bcf86cd799439011",
+                "user_id": "507f1f77bcf86cd799439012",
+                "title": "Understanding Quantum Computing",
+                "provider": "openai",
+                "model_name": "gpt-4o-mini",
+                "message_count": 2,
+                "total_tokens_used": 195,
+                "total_context_size": 128000,
+                "remaining_context_size": 127805,
+                "total_used_percentage": 0.15,
+                "remaining_percentage": 99.85,
+                "folder_id": "507f1f77bcf86cd799439013",
+                "created_at": "2024-01-06T12:00:00Z",
+                "updated_at": "2024-01-06T12:00:00Z",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "Explain quantum computing in simple terms",
+                        "timestamp": "2024-01-06T12:00:00Z",
+                        "tokens_used": 25
+                    },
+                    {
+                        "role": "assistant",
+                        "content": "Quantum computing is a revolutionary...",
+                        "timestamp": "2024-01-06T12:00:00Z",
+                        "tokens_used": 45
+                    }
+                ]
+            }
+        }
+
+
 class ConversationListItem(BaseModel):
     """Response model for conversation in list view (without full messages)."""
     id: str = Field(..., description="Conversation ID")

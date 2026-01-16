@@ -5,8 +5,60 @@ import { useSession } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import { useFolders } from '../hooks/useFolders'
 import { useConversations } from '../hooks/useConversations'
+import { useOpenTabs } from '../hooks/useOpenTabs'
+import { useModels } from '../hooks/useModels'
 import { foldersApi } from '@/lib/api/folders'
-import type { Folder, Conversation } from '@/lib/api/types'
+import { conversationsApi } from '@/lib/api'
+import type { Folder, Conversation, Message } from '@/lib/api/types'
+
+// Format timestamp to Indian timezone with proper date and time
+const formatIndianDateTime = (timestamp: string): string => {
+  try {
+    const date = new Date(timestamp)
+    
+    // Check if date is valid
+    if (isNaN(date.getTime())) {
+      return timestamp // Return original if invalid
+    }
+    
+    // Format in Indian timezone (Asia/Kolkata)
+    const options: Intl.DateTimeFormatOptions = {
+      timeZone: 'Asia/Kolkata',
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true // 12-hour format with AM/PM
+    }
+    
+    return date.toLocaleString('en-IN', options)
+  } catch (error) {
+    return timestamp // Return original on error
+  }
+}
+
+// Format date only (for chat list)
+const formatIndianDate = (timestamp: string): string => {
+  try {
+    const date = new Date(timestamp)
+    
+    if (isNaN(date.getTime())) {
+      return timestamp
+    }
+    
+    const options: Intl.DateTimeFormatOptions = {
+      timeZone: 'Asia/Kolkata',
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric'
+    }
+    
+    return date.toLocaleDateString('en-IN', options)
+  } catch (error) {
+    return timestamp
+  }
+}
 import {
   Brain,
   Plus,
@@ -52,21 +104,97 @@ interface ChatFolder {
 export default function ChatsPage() {
   const { data: session, status } = useSession()
   const router = useRouter()
-  // Chat-related state (keeping for now)
-  const [activeChat, setActiveChat] = useState<string | null>(null)
-  const [selectedModel, setSelectedModel] = useState<string>('gpt-4')
+
+  // Folder-related state
   const [activeChatFolder, setActiveChatFolder] = useState<string | null>(null)
   const [isCreatingFolder, setIsCreatingFolder] = useState(false)
   const [newFolderName, setNewFolderName] = useState('')
 
+  // Model selection state
+  const [selectedModel, setSelectedModel] = useState<string>('gpt-4')
+
   // API hooks for data
   const { folders, loading: foldersLoading, error: foldersError, refetch: refetchFolders } = useFolders()
-  const { conversations: unorganizedChats, loading: chatsLoading, error: chatsError } = useConversations('null')
+  const { conversations: unorganizedChats, loading: chatsLoading, error: chatsError, refetch: refetchUnorganizedChats } = useConversations('null')
 
   // Hook for folder conversations (loaded when viewing a folder)
-  const { conversations: folderChats, loading: folderChatsLoading } = useConversations(
+  const { conversations: folderChats, loading: folderChatsLoading, refetch: refetchFolderChats } = useConversations(
     activeChatFolder || undefined
   )
+
+  // New hooks for tab management and models
+  const {
+    openTabs,
+    activeTabId,
+    openConversation,
+    closeTab,
+    switchTab,
+    createNewConversation,
+    clearActiveTab,
+    updateConversationAfterMessage,
+    updateTabTitle,
+    updateTabConversationId,
+    addConversationToCache,
+    getActiveConversation,
+    refreshConversation
+  } = useOpenTabs()
+
+  const { models: availableModels, loading: modelsLoading } = useModels()
+
+  // API helper functions that update hook cache
+  const handleSwitchModel = async (conversationId: string, model: string) => {
+    const response = await conversationsApi.switchModel(conversationId, model)
+    // Hook will update its cache automatically when needed
+  }
+
+  const handleSendMessage = async (conversationId: string, content: string) => {
+    // Add the user message to cache optimistically
+    const userMessage: Message = {
+      role: 'user',
+      content,
+      timestamp: new Date().toISOString(),
+      tokens_used: Math.floor(content.length / 4) // Rough estimate
+    }
+    // Note: ID will be assigned by backend, but for frontend we can use a temp ID
+    userMessage.id = `temp-${Date.now()}`
+    updateConversationAfterMessage(conversationId, userMessage, {})
+
+    // Send to API to get AI response
+    const response = await conversationsApi.sendMessage(conversationId, content)
+    updateConversationAfterMessage(conversationId, response.message, response.conversation)
+  }
+
+  const handleCreateConversation = async (model: string, firstMessage: string): Promise<string> => {
+    if (!activeTabId) throw new Error('No active tab')
+
+    const response = await conversationsApi.create({
+      provider: availableModels.find(m => m.id === model)?.provider as any || 'openai',
+      model_name: model,
+      first_message: firstMessage,
+      folder_id: activeChatFolder || null
+    })
+
+    // Update tab with real conversation ID and title
+    updateTabConversationId(activeTabId, response.id)
+    updateTabTitle(activeTabId, response.title)
+
+    // Add the conversation to the cache with both user and AI messages
+    addConversationToCache({
+      ...response,
+      messages: response.messages // Include both messages from creation
+    })
+
+    // Refresh the conversations list to show the new conversation
+    if (activeChatFolder) {
+      // If in a folder, refresh folder conversations
+      refetchFolderChats()
+    } else {
+      // If not in a folder, refresh unorganized conversations
+      refetchUnorganizedChats()
+    }
+
+    return response.id
+  }
 
   // Transform folders to match existing component interface
   const chatFolders: ChatFolder[] = folders.map(folder => ({
@@ -76,14 +204,6 @@ export default function ChatsPage() {
     updated_at: folder.updated_at,
     chats: [] // Will be populated when folder is opened
   }))
-  
-  // Tab management state
-  interface ChatTab {
-    id: string
-    chatId: string | null
-  }
-  const [openChatTabs, setOpenChatTabs] = useState<ChatTab[]>([])
-  const [activeChatTabId, setActiveChatTabId] = useState<string | null>(null)
 
   // Redirect to login if not authenticated
   useEffect(() => {
@@ -98,35 +218,35 @@ export default function ChatsPage() {
       // Ctrl+T or Cmd+T: New chat tab
       if ((e.ctrlKey || e.metaKey) && e.key === 't') {
         e.preventDefault()
-        handleCreateNewChatTab()
+        createNewConversation()
       }
-      
+
       // Ctrl+W or Cmd+W: Close current tab
-      if ((e.ctrlKey || e.metaKey) && e.key === 'w' && activeChatTabId) {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'w' && activeTabId) {
         e.preventDefault()
-        handleCloseChatTab(activeChatTabId)
+        closeTab(activeTabId)
       }
 
       // Ctrl+Tab: Switch to next tab
-      if (e.ctrlKey && e.key === 'Tab' && openChatTabs.length > 0) {
+      if (e.ctrlKey && e.key === 'Tab' && openTabs.length > 0) {
         e.preventDefault()
-        const currentIndex = openChatTabs.findIndex(tab => tab.id === activeChatTabId)
-        const nextIndex = (currentIndex + 1) % openChatTabs.length
-        handleSwitchChatTab(openChatTabs[nextIndex].id)
+        const currentIndex = openTabs.findIndex(tab => tab.id === activeTabId)
+        const nextIndex = (currentIndex + 1) % openTabs.length
+        switchTab(openTabs[nextIndex].id)
       }
 
       // Ctrl+Shift+Tab: Switch to previous tab
-      if (e.ctrlKey && e.shiftKey && e.key === 'Tab' && openChatTabs.length > 0) {
+      if (e.ctrlKey && e.shiftKey && e.key === 'Tab' && openTabs.length > 0) {
         e.preventDefault()
-        const currentIndex = openChatTabs.findIndex(tab => tab.id === activeChatTabId)
-        const prevIndex = (currentIndex - 1 + openChatTabs.length) % openChatTabs.length
-        handleSwitchChatTab(openChatTabs[prevIndex].id)
+        const currentIndex = openTabs.findIndex(tab => tab.id === activeTabId)
+        const prevIndex = (currentIndex - 1 + openTabs.length) % openTabs.length
+        switchTab(openTabs[prevIndex].id)
       }
     }
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [activeChatTabId, openChatTabs])
+  }, [activeTabId, openTabs, createNewConversation, closeTab, switchTab])
 
   // Show loading while checking authentication
   if (status === 'loading') {
@@ -142,47 +262,13 @@ export default function ChatsPage() {
   }
 
   // Tab management functions
-  const handleOpenChatTab = (chatId: string | null) => {
-    // Chat opening functionality will be implemented in a future phase
-    console.log('Chat opening disabled for now - will be implemented later')
-    // TODO: Show a toast message or tooltip indicating chat opening is not available yet
+  const handleOpenChatTab = (chatId: string) => {
+    openConversation(chatId)
   }
 
   const handleBackToChats = () => {
-    setActiveChat(null)
-    setActiveChatTabId(null)
-  }
-
-  const handleCloseChatTab = (tabId: string) => {
-    const updatedTabs = openChatTabs.filter(tab => tab.id !== tabId)
-    setOpenChatTabs(updatedTabs)
-    
-    // If closing the active tab, switch to another tab or set to null
-    if (tabId === activeChatTabId) {
-      if (updatedTabs.length > 0) {
-        const lastTab = updatedTabs[updatedTabs.length - 1]
-        setActiveChatTabId(lastTab.id)
-        setActiveChat(lastTab.chatId)
-      } else {
-        // No more tabs, return to chats overview
-        setActiveChatTabId(null)
-        setActiveChat(null)
-      }
-    }
-  }
-
-  const handleSwitchChatTab = (tabId: string) => {
-    const tab = openChatTabs.find(t => t.id === tabId)
-    if (tab) {
-      setActiveChatTabId(tabId)
-      setActiveChat(tab.chatId)
-    }
-  }
-
-  const handleCreateNewChatTab = () => {
-    // Creating new conversations will be implemented in a future phase
-    console.log('Creating new conversations disabled for now - will be implemented later')
-    // TODO: Show a toast message indicating this feature is not available yet
+    // Clear active tab but preserve all tabs and cache
+    clearActiveTab()
   }
 
   // handleMoveChatToFolder removed - moving chats not in scope
@@ -193,7 +279,6 @@ export default function ChatsPage() {
       // Refresh folders list to show the new folder
       refetchFolders()
     } catch (error) {
-      console.error('Failed to create folder:', error)
       // TODO: Show error message to user
     }
   }
@@ -207,8 +292,8 @@ export default function ChatsPage() {
     }
   }
 
-  // If chat is active, show chat interface
-  if (activeChat) {
+  // If there are open tabs AND an active tab, show chat interface
+  if (openTabs.length > 0 && activeTabId) {
     return (
       <AppLayout>
         <div className="flex flex-col flex-1 bg-gray-50">
@@ -225,14 +310,13 @@ export default function ChatsPage() {
             </button>
 
             {/* Chat Tabs */}
-            {openChatTabs.map((tab) => {
-              const chat = [...chatFolders.flatMap(f => f.chats), ...unorganizedChats].find(c => c.id === tab.chatId)
-              const isActive = tab.id === activeChatTabId
-              
+            {openTabs.map((tab) => {
+              const isActive = tab.id === activeTabId
+
               return (
                 <div
                   key={tab.id}
-                  title={chat?.title || 'New Chat'}
+                  title={tab.title}
                   className={`group flex items-center gap-2 px-3 py-2 rounded-t-lg border-b-2 transition-all cursor-pointer min-w-[160px] max-w-[220px] flex-shrink-0 ${
                     isActive
                       ? 'bg-purple-50 border-purple-600 text-purple-700 shadow-sm'
@@ -240,18 +324,18 @@ export default function ChatsPage() {
                   }`}
                 >
                   <button
-                    onClick={() => handleSwitchChatTab(tab.id)}
+                    onClick={() => switchTab(tab.id)}
                     className="flex items-center gap-2 flex-1 min-w-0"
                   >
                     <MessageSquare className="h-3.5 w-3.5 flex-shrink-0" />
                     <span className="text-sm font-medium truncate">
-                      {chat?.title || 'New Chat'}
+                      {tab.title}
                     </span>
                   </button>
                   <button
                     onClick={(e) => {
                       e.stopPropagation()
-                      handleCloseChatTab(tab.id)
+                      closeTab(tab.id)
                     }}
                     className={`p-0.5 rounded hover:bg-gray-200 transition-all flex-shrink-0 ${
                       isActive ? 'opacity-70 hover:opacity-100' : 'opacity-0 group-hover:opacity-70 group-hover:hover:opacity-100'
@@ -263,10 +347,10 @@ export default function ChatsPage() {
                 </div>
               )
             })}
-            
+
             {/* Add New Tab Button - Inline with tabs */}
             <button
-              onClick={handleCreateNewChatTab}
+              onClick={createNewConversation}
               className="p-2 hover:bg-purple-50 rounded-lg transition-colors flex-shrink-0 text-purple-600 hover:text-purple-700"
               title="New chat tab (Ctrl+T)"
             >
@@ -278,20 +362,16 @@ export default function ChatsPage() {
         {/* Active Chat Content */}
         <div className="flex-1 overflow-hidden">
           <ChatComponent
-            activeChat={activeChat}
-            chatFolders={chatFolders}
-            unorganizedChats={unorganizedChats}
+            activeChat={activeTabId ? openTabs.find(t => t.id === activeTabId)?.conversationId || null : null}
+            activeConversation={getActiveConversation()}
             selectedModel={selectedModel}
-            openTabs={openChatTabs}
-            activeTabId={activeChatTabId}
-            onUpdateChatFolders={setChatFolders}
-            onUpdateUnorganizedChats={setUnorganizedChats}
+            availableModels={availableModels}
+            activeTabId={activeTabId}
             onSetSelectedModel={setSelectedModel}
-            onOpenTab={handleOpenChatTab}
-            onCloseTab={handleCloseChatTab}
-            onSwitchTab={handleSwitchChatTab}
-            onCreateNewChat={handleCreateNewChatTab}
-            onCreateFolder={handleCreateChatFolder}
+            onSwitchModel={handleSwitchModel}
+            onSendMessage={handleSendMessage}
+            onCreateConversation={handleCreateConversation}
+            onUpdateTabTitle={updateTabTitle}
           />
         </div>
         </div>
@@ -333,7 +413,7 @@ export default function ChatsPage() {
                         </div>
                       </div>
                       <button
-                        onClick={handleCreateNewChatTab}
+                        onClick={createNewConversation}
                         className="px-3 py-1.5 text-sm bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors font-medium inline-flex items-center gap-1.5"
                       >
                         <Plus className="h-3.5 w-3.5" />
@@ -365,7 +445,7 @@ export default function ChatsPage() {
                               {chat.title}
                             </h4>
                             <div className="flex items-center gap-3 mt-0.5">
-                              <span className="text-xs text-gray-500">{new Date(chat.updated_at).toLocaleDateString()}</span>
+                              <span className="text-xs text-gray-500">{formatIndianDate(chat.updated_at)}</span>
                               <span className="text-xs text-gray-400">•</span>
                               <span className="text-xs text-gray-500">{chat.message_count} msg{chat.message_count !== 1 ? 's' : ''}</span>
                             </div>
@@ -401,16 +481,16 @@ export default function ChatsPage() {
                   >
                     <FolderPlus className="h-3.5 w-3.5" />
                     New Folder
-                  </button>
-                  <button
-                    onClick={handleCreateNewChatTab}
-                    className="px-3 py-1.5 text-sm bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors font-medium inline-flex items-center gap-1.5"
-                  >
-                    <Plus className="h-3.5 w-3.5" />
-                    New Chat
-                  </button>
-                </div>
-              </div>
+                      </button>
+                      <button
+                        onClick={createNewConversation}
+                        className="px-3 py-1.5 text-sm bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors font-medium inline-flex items-center gap-1.5"
+                      >
+                        <Plus className="h-3.5 w-3.5" />
+                        New Chat
+                      </button>
+                    </div>
+                  </div>
 
               {/* New Folder Dialog */}
               <Dialog
@@ -540,7 +620,7 @@ export default function ChatsPage() {
                             {chat.title}
                           </h4>
                           <div className="flex items-center gap-3 mt-0.5">
-                            <span className="text-xs text-gray-500">{new Date(chat.updated_at).toLocaleDateString()}</span>
+                            <span className="text-xs text-gray-500">{formatIndianDate(chat.updated_at)}</span>
                             <span className="text-xs text-gray-400">•</span>
                             <span className="text-xs text-gray-500">{chat.message_count} message{chat.message_count !== 1 ? 's' : ''}</span>
                           </div>
@@ -558,7 +638,7 @@ export default function ChatsPage() {
                   <h3 className="text-lg font-semibold text-gray-900 mb-1">No Chats Yet</h3>
                   <p className="text-sm text-gray-600 mb-4">Start a new conversation to get started</p>
                   <button
-                    onClick={handleCreateNewChatTab}
+                    onClick={createNewConversation}
                     className="px-3 py-1.5 text-sm bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors font-medium inline-flex items-center gap-1.5"
                   >
                     <Plus className="h-3.5 w-3.5" />

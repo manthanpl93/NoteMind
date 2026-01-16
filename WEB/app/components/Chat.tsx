@@ -1,14 +1,45 @@
 'use client'
 
-import { useState } from 'react'
-import { 
-  Bot, 
-  Send, 
-  PencilLine, 
+import { useState, useEffect } from 'react'
+import {
+  Bot,
+  Send,
+  PencilLine,
   FileSearch,
   ChevronDown,
   X
 } from 'lucide-react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
+import { conversationsApi, messagesApi } from '@/lib/api'
+import type { AIModel, ConversationWithMessages, Message } from '@/lib/api/types'
+
+// Format timestamp to Indian timezone with proper date and time
+const formatIndianDateTime = (timestamp: string): string => {
+  try {
+    const date = new Date(timestamp)
+    
+    // Check if date is valid
+    if (isNaN(date.getTime())) {
+      return timestamp // Return original if invalid
+    }
+    
+    // Format in Indian timezone (Asia/Kolkata)
+    const options: Intl.DateTimeFormatOptions = {
+      timeZone: 'Asia/Kolkata',
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true // 12-hour format with AM/PM
+    }
+    
+    return date.toLocaleString('en-IN', options)
+  } catch (error) {
+    return timestamp // Return original on error
+  }
+}
 
 interface ChatMessage {
   id: string
@@ -60,42 +91,103 @@ interface ChatTab {
 
 interface ChatProps {
   activeChat: string | null
-  chatFolders: ChatFolder[]
-  unorganizedChats: Chat[]
+  activeConversation: ConversationWithMessages | null
   selectedModel: string
-  openTabs: ChatTab[]
+  availableModels: AIModel[]
   activeTabId: string | null
-  onUpdateChatFolders: (folders: ChatFolder[]) => void
-  onUpdateUnorganizedChats: (chats: Chat[]) => void
   onSetSelectedModel: (model: string) => void
-  onOpenTab: (chatId: string | null) => void
-  onCloseTab: (tabId: string) => void
-  onSwitchTab: (tabId: string) => void
-  onCreateNewChat: () => void
-  onMoveChatToFolder: (chatId: string, folderId: string | null) => void
-  onCreateFolder: (folderName: string) => void
+  onSwitchModel: (conversationId: string, model: string) => void
+  onSendMessage: (conversationId: string, content: string) => void
+  onCreateConversation: (model: string, firstMessage: string) => Promise<string>
+  onUpdateTabTitle: (tabId: string, title: string) => void
 }
 
 export function ChatComponent({
   activeChat,
-  chatFolders,
-  unorganizedChats,
+  activeConversation,
   selectedModel,
-  openTabs,
+  availableModels,
   activeTabId,
-  onUpdateChatFolders,
-  onUpdateUnorganizedChats,
   onSetSelectedModel,
-  onOpenTab,
-  onCloseTab,
-  onSwitchTab,
-  onCreateNewChat,
-  onMoveChatToFolder,
-  onCreateFolder
+  onSwitchModel,
+  onSendMessage,
+  onCreateConversation,
+  onUpdateTabTitle
 }: ChatProps) {
   const [chatInput, setChatInput] = useState('')
   const [chatMode, setChatMode] = useState<'note-taking' | 'ask' | 'explore'>('explore')
   const [showModeDropdown, setShowModeDropdown] = useState(false)
+  const [currentConversation, setCurrentConversation] = useState<ConversationWithMessages | null>(null)
+  const [isLoading, setIsLoading] = useState(false)
+
+  // Extract context usage data (with type safety)
+  const contextUsageData = (() => {
+    if (!currentConversation) return { percentage: 0, tokensUsed: 0, totalContext: 0 }
+    // API returns context usage data in conversation response
+    const conv = currentConversation as any
+    return {
+      percentage: conv.total_used_percentage ?? 0,
+      tokensUsed: conv.total_tokens_used ?? 0,
+      totalContext: conv.total_context_size ?? 0
+    }
+  })()
+  
+  const contextUsagePercentage = contextUsageData.percentage
+
+  // Use passed conversation data or load if not available
+  useEffect(() => {
+    if (activeConversation) {
+      // Use cached data passed from parent (even if messages array is empty)
+      // Ensure messages is always an array
+      setCurrentConversation({
+        ...activeConversation,
+        messages: Array.isArray(activeConversation.messages) ? activeConversation.messages : []
+      })
+      setIsLoading(false)
+    } else if (activeChat && activeChat !== null) {
+      // Load conversation data if we have an active chat ID
+      let isCancelled = false
+      
+      const loadConversation = async () => {
+        setIsLoading(true)
+        try {
+          // Load existing conversation
+          const [conversation, messages] = await Promise.all([
+            conversationsApi.get(activeChat),
+            messagesApi.list(activeChat)
+          ])
+
+          // Only update state if this effect is still valid
+          if (!isCancelled) {
+            // Transform to expected format
+            setCurrentConversation({
+              ...conversation,
+              messages: Array.isArray(messages) ? messages : []
+            })
+          }
+        } catch (error) {
+          if (!isCancelled) {
+            setCurrentConversation(null)
+          }
+        } finally {
+          if (!isCancelled) {
+            setIsLoading(false)
+          }
+        }
+      }
+
+      loadConversation()
+
+      // Cleanup function to prevent state updates if dependencies change
+      return () => {
+        isCancelled = true
+      }
+    } else {
+      // No active conversation
+      setCurrentConversation(null)
+      setIsLoading(false)
+    }
+  }, [activeChat, activeConversation])
   const [modifiedNotes, setModifiedNotes] = useState<ModifiedNote[]>([
     // Demo data - shows by default
     {
@@ -114,6 +206,7 @@ export function ChatComponent({
   const [showModifiedNotes, setShowModifiedNotes] = useState(true)
   const [selectedNoteForDiff, setSelectedNoteForDiff] = useState<string | null>(null)
   const [diffViewMode, setDiffViewMode] = useState<'new' | 'old' | 'diff'>('new')
+  const [showContextTooltip, setShowContextTooltip] = useState(false)
 
   // Mock unified HTML document with inline diff highlights
   const getUnifiedHtmlWithDiff = (noteId: string, mode: 'new' | 'old' | 'diff'): string => {
@@ -249,99 +342,69 @@ class Agent {
     }
   }
 
-  const currentChat = [...chatFolders.flatMap(f => f.chats), ...unorganizedChats].find(c => c.id === activeChat)
+  const handleSendMessage = async () => {
+    if (!chatInput.trim()) return
 
-  const handleSendMessage = () => {
-    if (!chatInput.trim() || !activeChat) return
-
-    const newMessage: ChatMessage = {
-      id: `msg-${Date.now()}`,
-      role: 'user',
-      content: chatInput,
-      timestamp: new Date().toLocaleString(),
-      mode: chatMode
-    }
-
-    // Update the chat with new message
-    const updateChat = (chat: Chat) => {
-      if (chat.id === activeChat) {
-        return {
-          ...chat,
-          messages: [...chat.messages, newMessage],
-          title: chat.messages.length === 0 ? chatInput.slice(0, 50) : chat.title,
-          updatedAt: new Date().toISOString().split('T')[0]
-        }
-      }
-      return chat
-    }
-
-    onUpdateChatFolders(chatFolders.map(folder => ({
-      ...folder,
-      chats: folder.chats.map(updateChat)
-    })))
-    onUpdateUnorganizedChats(unorganizedChats.map(updateChat))
+    const messageContent = chatInput.trim()
     setChatInput('')
+    setIsLoading(true)
 
-    // Simulate AI response after a short delay
-    setTimeout(() => {
-      let responseContent = ''
-      
-      if (chatMode === 'note-taking') {
-        responseContent = `**Note Taking Mode Active**\n\nI'll help you modify your notes. Based on your request: "${newMessage.content}"\n\nI would:\n1. Analyze the requested changes\n2. Update the relevant note sections\n3. Maintain proper formatting and structure\n4. Preserve your existing content where needed\n\nThis is a demo. In a production environment, I would apply these changes directly to your notes using ${selectedModel}.`
-        
-        // Simulate adding modified notes
-        const newModifiedNote: ModifiedNote = {
-          id: `note-${Date.now()}`,
-          title: 'AI Agents Overview', // Demo note title
-          changesCount: Math.floor(Math.random() * 10) + 1,
-          timestamp: new Date().toLocaleTimeString()
-        }
-        setModifiedNotes(prev => {
-          // Check if note already exists, update it
-          const existing = prev.find(n => n.title === newModifiedNote.title)
-          if (existing) {
-            return prev.map(n => 
-              n.title === newModifiedNote.title 
-                ? { ...n, changesCount: n.changesCount + newModifiedNote.changesCount, timestamp: newModifiedNote.timestamp }
-                : n
-            )
-          }
-          return [...prev, newModifiedNote]
-        })
-      } else if (chatMode === 'ask') {
-        responseContent = `**Ask Mode Active**\n\nSearching your knowledge base for: "${newMessage.content}"\n\nBased on your notes, here's what I found:\n\n• Found references in "AI Agents" space\n• Found references in "Next.js" space\n\nThis is a demo response using ${selectedModel}. In a real implementation, I would:\n1. Search through all your notes\n2. Find relevant information\n3. Provide accurate answers with citations\n4. Suggest related topics`
+    try {
+      if (!activeChat) {
+        // New conversation - create it with AI response included
+        await onCreateConversation(selectedModel, messageContent)
+        // AI response is already included, no need to call sendMessage
       } else {
-        responseContent = `**Explore Mode Active**\n\nSearching the web and my general knowledge for: "${newMessage.content}"\n\nHere's what I found:\n\n• Researching latest information from across the web\n• Accessing general knowledge and external resources\n• Compiling comprehensive insights\n\nThis is a demo response using ${selectedModel}. In a production environment, I would:\n1. Search the internet for current information\n2. Use my trained knowledge base\n3. Provide well-researched answers with sources\n4. Offer broader context beyond your personal notes`
+        // Existing conversation - send message
+        await onSendMessage(activeChat, messageContent)
       }
+    } catch (error) {
+      // TODO: Show error toast to user
+    } finally {
+      setIsLoading(false)
+    }
 
-      const aiResponse: ChatMessage = {
-        id: `msg-${Date.now()}`,
-        role: 'assistant',
-        content: responseContent,
-        timestamp: new Date().toLocaleString(),
-        mode: chatMode
+    // TODO: Backend integration for modes and notes - currently mocked
+    if (chatMode === 'note-taking') {
+      const newModifiedNote: ModifiedNote = {
+        id: `note-${Date.now()}`,
+        title: 'AI Agents Overview', // Demo note title
+        changesCount: Math.floor(Math.random() * 10) + 1,
+        timestamp: new Date().toLocaleTimeString()
       }
-
-      const updateWithAI = (chat: Chat) => {
-        if (chat.id === activeChat) {
-          return {
-            ...chat,
-            messages: [...chat.messages, aiResponse],
-            updatedAt: new Date().toISOString().split('T')[0]
-          }
+      setModifiedNotes(prev => {
+        // Check if note already exists, update it
+        const existing = prev.find(n => n.title === newModifiedNote.title)
+        if (existing) {
+          return prev.map(n =>
+            n.title === newModifiedNote.title
+              ? { ...n, changesCount: n.changesCount + newModifiedNote.changesCount, timestamp: newModifiedNote.timestamp }
+              : n
+          )
         }
-        return chat
-      }
-
-      onUpdateChatFolders(chatFolders.map(folder => ({
-        ...folder,
-        chats: folder.chats.map(updateWithAI)
-      })))
-      onUpdateUnorganizedChats(unorganizedChats.map(updateWithAI))
-    }, 1000)
+        return [...prev, newModifiedNote]
+      })
+    }
   }
 
-  if (!currentChat) {
+  // Handle loading state
+  if (isLoading && activeChat) {
+    return (
+      <div className="flex items-center justify-center h-full p-8">
+        <div className="text-center">
+          <Bot className="h-16 w-16 text-purple-600 mx-auto mb-4 animate-pulse" />
+          <h2 className="text-xl font-semibold text-gray-900 mb-2">Loading Conversation...</h2>
+          <p className="text-gray-600">Fetching messages and conversation details</p>
+        </div>
+      </div>
+    )
+  }
+
+  // Handle no active tab or new conversation
+  // Also check if messages array exists and is valid
+  const isNewConversation = !activeChat || !currentConversation || !Array.isArray(currentConversation?.messages)
+
+  if (!activeTabId) {
     return (
       <div className="flex items-center justify-center h-full p-8">
         <div className="text-center">
@@ -358,6 +421,72 @@ class Agent {
   // Get unified HTML with inline diff highlights
   const getUnifiedDiffHtml = (noteId: string): string => {
     return getUnifiedHtmlWithDiff(noteId, diffViewMode)
+  }
+
+  // Circular progress ring component for context usage
+  const renderContextUsageIndicator = () => {
+    const percentage = contextUsagePercentage
+    const size = 20
+    const strokeWidth = 2.5
+    const radius = (size - strokeWidth) / 2
+    const circumference = radius * 2 * Math.PI
+    const offset = circumference - (percentage / 100) * circumference
+
+    // Format tokens in K format (e.g., 52000 -> 52k)
+    const formatTokens = (tokens: number): string => {
+      if (tokens >= 1000) {
+        return `${Math.round(tokens / 1000)}k`
+      }
+      return `${tokens}`
+    }
+
+    const tokensUsedFormatted = formatTokens(contextUsageData.tokensUsed)
+    const totalContextFormatted = formatTokens(contextUsageData.totalContext)
+    const tooltipText = `${Math.round(percentage)}% - ${tokensUsedFormatted}/${totalContextFormatted} context used`
+
+    return (
+      <div 
+        className="absolute right-10 bottom-2.5 flex items-center justify-center transition-transform hover:scale-110 cursor-help"
+        onMouseEnter={() => setShowContextTooltip(true)}
+        onMouseLeave={() => setShowContextTooltip(false)}
+      >
+        <svg width={size} height={size} className="transform -rotate-90">
+          {/* Background circle */}
+          <circle
+            cx={size / 2}
+            cy={size / 2}
+            r={radius}
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={strokeWidth}
+            className="text-gray-300"
+          />
+          {/* Progress circle */}
+          <circle
+            cx={size / 2}
+            cy={size / 2}
+            r={radius}
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={strokeWidth}
+            strokeDasharray={circumference}
+            strokeDashoffset={offset}
+            strokeLinecap="round"
+            className="text-purple-600 transition-all duration-300 ease-out"
+          />
+        </svg>
+        {/* Custom Tooltip */}
+        {showContextTooltip && (
+          <div className="absolute bottom-full mb-2 px-2 py-1 bg-gray-900 text-white text-xs rounded whitespace-nowrap pointer-events-none z-50">
+            {tooltipText}
+            {/* Arrow pointing down */}
+            <div className="absolute top-full left-1/2 transform -translate-x-1/2 -mt-px">
+              <div className="border-4 border-transparent border-t-gray-900"></div>
+            </div>
+          </div>
+        )}
+      </div>
+    )
   }
 
   return (
@@ -441,7 +570,7 @@ class Agent {
       <div className={`flex flex-col ${selectedNoteForDiff ? 'w-[30%]' : 'w-full'} h-full`}>
         {/* Messages Area */}
         <div className="flex-1 overflow-y-auto p-6">
-        {currentChat.messages.length === 0 ? (
+        {isNewConversation || !currentConversation ? (
           <div className="flex items-center justify-center h-full">
             <div className="text-center max-w-md">
               <Bot className="h-16 w-16 text-purple-600 mx-auto mb-4" />
@@ -484,30 +613,30 @@ class Agent {
           </div>
         ) : (
           <div className="max-w-4xl mx-auto space-y-6">
-            {currentChat.messages.map((message) => (
+            {(Array.isArray(currentConversation.messages) ? currentConversation.messages : []).map((message, index) => (
               <div
-                key={message.id}
+                key={message.id || `${message.timestamp}-${message.role}-${index}`}
                 className={`flex gap-4 ${
                   message.role === 'user' ? 'justify-end' : 'justify-start'
                 }`}
               >
                 {message.role === 'assistant' && (
-                  <div className="w-8 h-8 rounded-full bg-purple-600 flex items-center justify-center flex-shrink-0">
+                  <div className="w-8 h-8 rounded-full bg-gradient-to-br from-purple-600 to-indigo-600 flex items-center justify-center flex-shrink-0 shadow-md">
                     <Bot className="h-5 w-5 text-white" />
                   </div>
                 )}
                 <div
-                  className={`max-w-[70%] rounded-2xl px-4 py-3 ${
+                  className={`max-w-[70%] rounded-2xl px-5 py-3.5 shadow-sm ${
                     message.role === 'user'
-                      ? 'bg-purple-600 text-white'
-                      : 'bg-gray-100 text-gray-900'
+                      ? 'bg-gradient-to-br from-purple-600 to-indigo-600 text-white'
+                      : 'bg-white border border-gray-200 text-gray-900'
                   }`}
                 >
                   {/* Mode indicator badge */}
                   {message.mode && (
                     <div className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium mb-2 ${
                       message.role === 'user'
-                        ? 'bg-purple-700 text-purple-100'
+                        ? 'bg-white/20 text-white'
                         : 'bg-purple-100 text-purple-700'
                     }`}>
                       {message.mode === 'note-taking' ? (
@@ -528,15 +657,23 @@ class Agent {
                       )}
                     </div>
                   )}
-                  <p className="text-sm whitespace-pre-wrap">{message.content}</p>
-                  <p className={`text-xs mt-2 ${
-                    message.role === 'user' ? 'text-purple-200' : 'text-gray-500'
+                  {message.role === 'user' ? (
+                    <p className="text-sm whitespace-pre-wrap leading-relaxed">{message.content}</p>
+                  ) : (
+                    <div className="text-sm prose prose-sm prose-chat max-w-none">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                        {message.content}
+                      </ReactMarkdown>
+                    </div>
+                  )}
+                  <p className={`text-xs mt-2.5 ${
+                    message.role === 'user' ? 'text-purple-100' : 'text-gray-400'
                   }`}>
-                    {message.timestamp}
+                    {formatIndianDateTime(message.timestamp)}
                   </p>
                 </div>
                 {message.role === 'user' && (
-                  <div className="w-8 h-8 rounded-full bg-gradient-to-br from-purple-500 to-blue-500 flex items-center justify-center flex-shrink-0 text-white font-semibold text-sm">
+                  <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-cyan-500 flex items-center justify-center flex-shrink-0 text-white font-semibold text-sm shadow-md">
                     U
                   </div>
                 )}
@@ -624,7 +761,7 @@ class Agent {
                     ? 'Ask about your notes...'
                     : 'Ask anything...'
                 }
-                className="w-full pl-3 pr-10 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none resize-none text-sm"
+                className="w-full pl-3 pr-16 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none resize-none text-sm"
                 rows={1}
                 style={{ minHeight: '38px', maxHeight: '150px' }}
                 onInput={(e) => {
@@ -633,10 +770,12 @@ class Agent {
                   target.style.height = Math.min(target.scrollHeight, 150) + 'px'
                 }}
               />
+              {/* Context Usage Indicator */}
+              {currentConversation && renderContextUsageIndicator()}
               {/* Send Button Inside Input */}
               <button
                 onClick={handleSendMessage}
-                disabled={!chatInput.trim()}
+                disabled={!chatInput.trim() || isLoading}
                 className="absolute right-2 bottom-2 p-1.5 bg-purple-600 text-white rounded-md hover:bg-purple-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:bg-gray-300"
                 title="Send message (Enter)"
               >
@@ -707,17 +846,26 @@ class Agent {
             {/* Model Selector - Compact */}
             <select
               value={selectedModel}
-              onChange={(e) => onSetSelectedModel(e.target.value)}
+              onChange={async (e) => {
+                const newModel = e.target.value
+                onSetSelectedModel(newModel)
+                if (activeChat) {
+                  // Switch model for existing conversation
+                  try {
+                    await onSwitchModel(activeChat, newModel)
+                  } catch (error) {
+                    // TODO: Show error toast and revert selection
+                  }
+                }
+              }}
               className="px-2 py-1 text-xs border border-gray-300 rounded-md bg-white hover:bg-gray-50 focus:ring-1 focus:ring-purple-500 outline-none cursor-pointer"
               title="AI Model"
             >
-              <option value="gpt-4">GPT-4</option>
-              <option value="gpt-4-turbo">GPT-4 Turbo</option>
-              <option value="gpt-3.5-turbo">GPT-3.5 Turbo</option>
-              <option value="claude-3-opus">Claude 3 Opus</option>
-              <option value="claude-3-sonnet">Claude 3 Sonnet</option>
-              <option value="claude-3-haiku">Claude 3 Haiku</option>
-              <option value="gemini-pro">Gemini Pro</option>
+              {availableModels.map((model) => (
+                <option key={model.id} value={model.id}>
+                  {model.name} ({model.provider})
+                </option>
+              ))}
             </select>
 
             {/* Hint Text */}
